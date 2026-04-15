@@ -20,7 +20,7 @@ export default function LoginPage({
           <CardDescription>Faça login para acessar o painel de atendimento premium.</CardDescription>
         </CardHeader>
         <CardContent className="pt-8">
-          <form className="animate-in flex-1 flex flex-col w-full justify-center gap-4 text-foreground">
+          <form action={login} className="animate-in flex-1 flex flex-col w-full justify-center gap-4 text-foreground">
             <div className="space-y-4">
               <div className="space-y-2">
                 <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70" htmlFor="email">
@@ -59,7 +59,7 @@ export default function LoginPage({
             )}
 
             <Button 
-              formAction={login} 
+              type="submit"
               className="w-full mt-6 shadow-lg shadow-primary/20 transition-all hover:scale-[1.02]"
               size="lg"
             >
