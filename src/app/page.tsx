@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { supabase } from '@/lib/supabase-client';
+import { createClient } from '@/utils/supabase/client';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -51,6 +51,7 @@ type MensagemInterna = {
 };
 
 export default function Dashboard() {
+  const supabase = createClient();
   const [conversas, setConversas] = useState<Conversa[]>([]);
   const [conversaAtiva, setConversaAtiva] = useState<Conversa | null>(null);
   const [mensagens, setMensagens] = useState<Mensagem[]>([]);
@@ -63,22 +64,49 @@ export default function Dashboard() {
   const [modoMensagem, setModoMensagem] = useState<'publico' | 'interno'>('publico');
   const [mensagensInternas, setMensagensInternas] = useState<MensagemInterna[]>([]);
   const [perfilAtual, setPerfilAtual] = useState<{ id: string, nome: string } | null>(null);
+  const [metrics, setMetrics] = useState({ totalAtendimentos: 0, csatMedio: 0 });
 
-  // Carregar lista de conversas e Perfil Ativo
+  // 1. Gerenciar Status Online e Carregar Perfil
   useEffect(() => {
-    async function loadInitialData() {
-      // Puxar sessão ativa
-      const { data: authData } = await supabase.auth.getUser();
-      const userId = authData.user?.id;
-
-      if (userId) {
-        const { data: atendente } = await supabase
-           .from('atendentes')
-           .select('id, nome')
-           .eq('id', userId)
-           .single();
-        if (atendente) setPerfilAtual(atendente);
+    async function setupDashboard() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        console.warn("Nenhum usuário autenticado encontrado no cliente.");
+        return;
       }
+
+      const { data: atendente } = await supabase
+         .from('atendentes')
+         .select('id, nome')
+         .eq('id', user.id)
+         .single();
+      
+      if (atendente) {
+        setPerfilAtual(atendente);
+        // Marcar como online
+        await supabase.from('atendentes').update({ status: 'online' }).eq('id', atendente.id);
+      } else {
+        console.warn("Perfil de atendente não encontrado para o ID:", user.id);
+      }
+    }
+    setupDashboard();
+
+    // Offline ao sair
+    const handleTabClose = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        await supabase.from('atendentes').update({ status: 'offline' }).eq('id', user.id);
+      }
+    };
+    window.addEventListener('beforeunload', handleTabClose);
+    return () => window.removeEventListener('beforeunload', handleTabClose);
+  }, []);
+
+  // 2. Carregar lista de conversas
+  useEffect(() => {
+    async function loadConversas() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
 
       const { data } = await supabase
         .from('conversas')
@@ -90,62 +118,69 @@ export default function Dashboard() {
         .order('última_mensagem_at', { ascending: false });
 
       if (data) {
-        // Filtrar conversas: Ver apenas as vinculadas ao atendente logado
-        const filtradas = data.filter((c: any) => c.bots_config.atendente_id === userId);
+        const filtradas = data.filter((c: any) => c.bots_config.atendente_id === user.id);
         setConversas(filtradas);
-        
         if (filtradas.length > 0 && !conversaAtiva) {
           setConversaAtiva(filtradas[0] as any);
         }
       }
     }
-    loadInitialData();
+    loadConversas();
 
     const channel = supabase
       .channel('public:conversas')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'conversas' }, () => {
-        loadInitialData();
+        loadConversas();
       })
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
+    return () => { supabase.removeChannel(channel); };
+  }, [conversaAtiva]);
 
-  // Carregar dados gerenciais
+  // 3. Carregar dados gerenciais (Reais)
   useEffect(() => {
     async function fetchGerencial() {
+      // Ranking
       const { data: ranking } = await supabase
         .from('atendentes')
         .select('*')
         .order('pontos_gamificacao', { ascending: false });
-      
       if (ranking) setAtendentesRanking(ranking);
 
-      setStatsVolume([
-        { nome: '08:00', volume: 12 },
-        { nome: '10:00', volume: 45 },
-        { nome: '12:00', volume: 38 },
-        { nome: '14:00', volume: 56 },
-        { nome: '16:00', volume: 22 },
-        { nome: '18:00', volume: 89 },
-        { nome: '20:00', volume: 67 },
-        { nome: '22:00', volume: 15 },
-      ]);
+      // Métricas Consolidadas (Reais)
+      const { count: total } = await supabase.from('conversas').select('*', { count: 'exact', head: true });
+      const { data: csatData } = await supabase.from('pesquisas_satisfacao').select('nota');
+      const avgCsat = csatData && csatData.length > 0 
+        ? csatData.reduce((acc, curr) => acc + curr.nota, 0) / csatData.length 
+        : 0;
+
+      setMetrics({ totalAtendimentos: total || 0, csatMedio: avgCsat });
+
+      // Volume por Hora Real (Últimas 24h)
+      const { data: msgVolume } = await supabase
+        .from('mensagens')
+        .select('created_at')
+        .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
+
+      if (msgVolume) {
+        const hours = Array.from({ length: 12 }, (_, i) => {
+          const hour = (new Date().getHours() - (11 - i) + 24) % 24;
+          const label = `${hour.toString().padStart(2, '0')}:00`;
+          const count = msgVolume.filter(m => new Date(m.created_at).getHours() === hour).length;
+          return { nome: label, volume: count };
+        });
+        setStatsVolume(hours);
+      }
     }
     fetchGerencial();
 
     const channel = supabase
-      .channel('public:atendentes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'atendentes' }, () => {
-        fetchGerencial();
-      })
+      .channel('realtime:stats')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'atendentes' }, () => fetchGerencial())
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'mensagens' }, () => fetchGerencial())
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => { supabase.removeChannel(channel); };
   }, []);
 
   // Carregar mensagens da conversa ativa
@@ -503,7 +538,7 @@ export default function Dashboard() {
                       <p className="text-xs font-medium text-muted-foreground uppercase">Atendimento Total</p>
                       <Users className="h-4 w-4 text-primary" />
                    </div>
-                   <div className="text-2xl font-bold">1.284</div>
+                   <div className="text-2xl font-bold">{metrics.totalAtendimentos}</div>
                    <p className="text-xs text-green-500">+12% hoje</p>
                 </Card>
                 <Card className="p-6 space-y-2">
@@ -511,9 +546,9 @@ export default function Dashboard() {
                       <p className="text-xs font-medium text-muted-foreground uppercase">CSAT Médio</p>
                       <Star className="h-4 w-4 text-yellow-500" />
                    </div>
-                   <div className="text-2xl font-bold">4.8 / 5.0</div>
+                   <div className="text-2xl font-bold">{metrics.csatMedio.toFixed(1)} / 5.0</div>
                    <div className="flex gap-0.5">
-                      {[1,2,3,4,5].map(s => <Star key={s} className="h-3 w-3 fill-yellow-500 text-yellow-500" />)}
+                      {[1,2,3,4,5].map(s => <Star key={s} className={`h-3 w-3 ${s <= Math.round(metrics.csatMedio) ? 'fill-yellow-500 text-yellow-500' : 'text-muted-foreground'}`} />)}
                    </div>
                 </Card>
                 <Card className="p-6 space-y-2">
