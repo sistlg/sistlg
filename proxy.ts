@@ -1,9 +1,8 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   // 1. Defesa inicial: Se não houver chaves, permite passar para não dar erro 500 no site todo
-  // Isso permite que a página carregue (mesmo que sem dados) e não interrompa a análise do desenvolvedor em produção.
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
     console.warn("⚠️ ALERTA: NEXT_PUBLIC_SUPABASE_URL ou ANON_KEY não configuradas no ambiente (Vercel/Local). O sistema de autenticação não funcionará.");
     return NextResponse.next();
@@ -47,7 +46,7 @@ export async function middleware(request: NextRequest) {
     }
 
   } catch (error) {
-    console.error("❌ Erro crítico no Middleware SISTLG:", error);
+    console.error("❌ Erro crítico no Proxy SISTLG:", error);
   }
 
   return supabaseResponse
