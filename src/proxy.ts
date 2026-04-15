@@ -8,7 +8,8 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  let supabaseResponse = NextResponse.next({ request });
+  // Inicializa a resposta padrão (sem passar o request inteiro como objeto)
+  let supabaseResponse = NextResponse.next()
 
   try {
     const supabase = createServerClient(
@@ -18,8 +19,17 @@ export async function proxy(request: NextRequest) {
         cookies: {
           getAll() { return request.cookies.getAll() },
           setAll(cookiesToSet) {
+            // Atualiza os cookies no request para que as rotas subsequentes (Server Components) os vejam
             cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
-            supabaseResponse = NextResponse.next({ request })
+            
+            // Em Next.js 16, para propagar mudanças no request upstream, usamos este padrão:
+            supabaseResponse = NextResponse.next({
+              request: {
+                headers: request.headers,
+              },
+            })
+
+            // Atualiza os cookies no response para o navegador
             cookiesToSet.forEach(({ name, value, options }) =>
               supabaseResponse.cookies.set(name, value, options)
             )
