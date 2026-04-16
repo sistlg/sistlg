@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
 import { isOperational } from '@/lib/hours';
 import { sendTelegramMessage } from '@/lib/telegram';
-import { generateEmbedding, analyzeSentiment } from '@/lib/openai';
+import { generateEmbedding, analyzeSentiment, generateAIResponse } from '@/lib/openai';
 
 export async function POST(
   request: NextRequest,
@@ -174,16 +174,34 @@ export async function POST(
     if (msgError) throw msgError;
 
     // 7. Verificar Horário de Atendimento
-    if (!isOperational()) {
-      const msgFechado = "Olá! No momento estamos fora do nosso horário de atendimento.\n\n" +
-                         "<b>Nossos horários:</b>\n" +
-                         "Seg-Sex: 08:00 às 23:00\n" +
-                         "Sáb-Dom: 18:00 às 23:00\n\n" +
-                         "Sua mensagem foi recebida e responderemos assim que possível!";
-      
       await sendTelegramMessage(botConfig.token_telegram, chatId, msgFechado);
       
       return NextResponse.json({ ok: true, status: 'closed' });
+    }
+
+    // 8. Resposta Inteligente IA (Autônomo)
+    if (botConfig.is_active && text.length > 0) {
+      try {
+        // Gerar resposta com base no contexto
+        const aiResponse = await generateAIResponse([
+          { role: 'user', content: text }
+        ], botConfig.nome_bot);
+
+        if (aiResponse) {
+          // 1. Enviar para o Telegram
+          await sendTelegramMessage(botConfig.token_telegram, chatId, aiResponse);
+
+          // 2. Salvar no banco
+          await supabaseAdmin.from('mensagens').insert({
+            conversa_id: conversa.id,
+            remetente: 'bot',
+            tipo: 'texto',
+            conteudo: aiResponse,
+          });
+        }
+      } catch (err) {
+        console.error('Erro no fluxo autônomo da IA:', err);
+      }
     }
 
     return NextResponse.json({ ok: true, status: 'received' });

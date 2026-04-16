@@ -85,3 +85,37 @@ Diretrizes:
     return text;
   }
 }
+
+/**
+ * Gera uma resposta autônoma para o cliente.
+ * Usa o contexto da conversa para ser mais preciso.
+ */
+export async function generateAIResponse(history: { role: 'user' | 'assistant', content: string }[], botName: string = 'sistlg'): Promise<string | null> {
+  if (history.length === 0) return null;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: `Você é o assistente virtual da empresa SISTLG, chamado ${botName}.
+Seu objetivo é realizar o primeiro atendimento de forma cordial, empática e eficiente.
+Instruções:
+- Seja conciso e use uma linguagem profissional, porém amigável.
+- Se o cliente perguntar algo que você não sabe, diga que vai encaminhá-lo para um atendente humano em instantes.
+- NUNCA invente informações sobre a empresa.
+- Use emojis moderadamente para tornar a conversa leve.`
+        },
+        ...history
+      ],
+      max_tokens: 500,
+      temperature: 0.7,
+    });
+
+    return response.choices[0].message.content?.trim() || null;
+  } catch (error) {
+    console.error('Erro ao gerar resposta da IA:', error);
+    return null;
+  }
+}
