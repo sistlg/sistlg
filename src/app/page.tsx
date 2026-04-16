@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
-import { Send, MoreVertical, Search, Bot, User, Clock, Settings, Sparkles, XCircle, CheckCircle2, Trophy, BarChart3, TrendingUp, Star, Users, LogOut } from 'lucide-react';
+import { Send, MoreVertical, Search, Bot, User, Clock, Settings, Sparkles, XCircle, CheckCircle2, Trophy, BarChart3, TrendingUp, Star, Users, LogOut, AlertCircle } from 'lucide-react';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -38,7 +38,7 @@ type Mensagem = {
   conteudo: string;
   sentimento?: 'positivo' | 'negativo' | 'neutro';
   created_at: string;
-  contexto?: 'publico' | 'interno'; // Adicionado para facilitar renderização unificada
+  contexto?: 'publico' | 'interno';
 };
 
 type MensagemInterna = {
@@ -65,28 +65,38 @@ export default function Dashboard() {
   const [mensagensInternas, setMensagensInternas] = useState<MensagemInterna[]>([]);
   const [perfilAtual, setPerfilAtual] = useState<{ id: string, nome: string } | null>(null);
   const [metrics, setMetrics] = useState({ totalAtendimentos: 0, csatMedio: 0 });
+  const [authError, setAuthError] = useState<string | null>(null);
 
   // 1. Gerenciar Status Online e Carregar Perfil
   useEffect(() => {
     async function setupDashboard() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        console.warn("Nenhum usuário autenticado encontrado no cliente.");
-        return;
-      }
+      try {
+        const { data: { user }, error: authErr } = await supabase.auth.getUser();
+        
+        if (authErr || !user) {
+          console.error("Auth error:", authErr);
+          setAuthError("Sessão não encontrada. Por favor, faça login novamente.");
+          return;
+        }
 
-      const { data: atendente } = await supabase
-         .from('atendentes')
-         .select('id, nome')
-         .eq('id', user.id)
-         .single();
-      
-      if (atendente) {
+        const { data: atendente, error: dbErr } = await supabase
+           .from('atendentes')
+           .select('id, nome')
+           .eq('id', user.id)
+           .single();
+        
+        if (dbErr || !atendente) {
+          console.error("DB error:", dbErr);
+          setAuthError(`Usuário reconhecido (${user.id.substring(0,8)}), mas perfil 'Atendente' não encontrado no banco.`);
+          return;
+        }
+
         setPerfilAtual(atendente);
+        setAuthError(null);
         // Marcar como online
         await supabase.from('atendentes').update({ status: 'online' }).eq('id', atendente.id);
-      } else {
-        console.warn("Perfil de atendente não encontrado para o ID:", user.id);
+      } catch (err) {
+        setAuthError("Erro inesperado ao carregar perfil.");
       }
     }
     setupDashboard();
@@ -348,27 +358,30 @@ export default function Dashboard() {
       <Tabs defaultValue="atendimento" className="flex flex-1 overflow-hidden">
         
         {/* Barra Lateral de Navegação (Menu) */}
-        <div className="w-16 border-r flex flex-col items-center py-4 gap-4 bg-muted/20 justify-between">
-          <TabsList className="flex-col bg-transparent h-auto gap-4">
-            <TabsTrigger value="atendimento" className="p-2 h-10 w-10">
-              <Bot className="w-5 h-5" />
-            </TabsTrigger>
-            <TabsTrigger value="gerencial" className="p-2 h-10 w-10">
-               <Trophy className="w-5 h-5" />
-            </TabsTrigger>
-            <Separator className="w-8" />
-            <Button variant="ghost" size="icon" className="h-10 w-10">
-              <Settings className="w-5 h-5" />
-            </Button>
-          </TabsList>
+        <div className="w-16 border-r flex flex-col items-center py-6 bg-muted/20 justify-between shrink-0">
+          <div className="flex flex-col items-center gap-6 w-full">
+            <TabsList className="flex flex-col bg-transparent h-auto p-0 gap-4">
+              <TabsTrigger value="atendimento" className="p-2 h-10 w-10 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground rounded-lg transition-all">
+                <Bot className="w-5 h-5" />
+              </TabsTrigger>
+              <TabsTrigger value="gerencial" className="p-2 h-10 w-10 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground rounded-lg transition-all">
+                 <Trophy className="w-5 h-5" />
+              </TabsTrigger>
+              <TabsTrigger value="configuracoes" className="p-2 h-10 w-10 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground rounded-lg transition-all">
+                 <Settings className="w-5 h-5" />
+              </TabsTrigger>
+            </TabsList>
+            
+            <Separator className="w-8 opacity-50" />
+          </div>
 
-          <Button variant="ghost" size="icon" className="h-10 w-10 text-muted-foreground hover:text-destructive hover:bg-destructive/10" onClick={fazerLogout} title="Sair da Conta">
+          <Button variant="ghost" size="icon" className="h-10 w-10 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg" onClick={fazerLogout} title="Sair da Conta">
             <LogOut className="w-5 h-5" />
           </Button>
         </div>
 
         {/* Conteúdo Aba Atendimento */}
-        <TabsContent value="atendimento" className="flex-1 flex m-0 overflow-hidden">
+        <TabsContent value="atendimento" className="flex-1 m-0 overflow-hidden flex flex-col focus-visible:outline-none focus-visible:ring-0">
           <div className="flex flex-1 overflow-hidden">
             <div className="w-1/3 max-w-sm border-r flex flex-col bg-card">
               <div className="p-4 border-b flex items-center justify-between">
@@ -377,41 +390,55 @@ export default function Dashboard() {
                     <AvatarImage src={`https://api.dicebear.com/7.x/initials/svg?seed=${perfilAtual?.nome || 'Admin'}`} />
                     <AvatarFallback>{perfilAtual?.nome?.charAt(0) || 'AT'}</AvatarFallback>
                   </Avatar>
-                  <div>
-                    <h2 className="font-semibold text-sm">Painel SISTLG</h2>
-                    <p className="text-xs text-muted-foreground flex items-center gap-1">
-                      <span className="w-2 h-2 rounded-full bg-green-500"></span> {perfilAtual?.nome || 'Logando...'}
-                    </p>
+                  <div className="overflow-hidden">
+                    <h2 className="font-semibold text-sm truncate">Painel SISTLG</h2>
+                    <div className="text-[10px] text-muted-foreground flex items-center gap-1.5 mt-0.5">
+                      {authError ? (
+                        <span className="text-destructive flex items-center gap-1"><AlertCircle className="w-2.5 h-2.5" /> Erro</span>
+                      ) : (
+                        <span className={`w-2 h-2 rounded-full ${perfilAtual ? 'bg-green-500 animate-pulse' : 'bg-yellow-500'}`}></span>
+                      )}
+                      <span className="truncate max-w-[120px]">
+                        {authError || perfilAtual?.nome || 'Logando...'}
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
               <div className="p-3">
                 <div className="relative">
                   <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <Input placeholder="Buscar conversas..." className="pl-9 bg-muted/50" />
+                  <Input placeholder="Buscar conversas..." className="pl-9 bg-muted/50 h-9 text-sm" />
                 </div>
               </div>
               <ScrollArea className="flex-1">
-                {conversas.map((conv) => (
-                  <div
-                    key={conv.id}
-                    onClick={() => setConversaAtiva(conv)}
-                    className={`p-4 cursor-pointer border-b hover:bg-accent transition-colors flex items-start gap-4 ${conversaAtiva?.id === conv.id ? 'bg-accent' : ''}`}
-                  >
-                    <Avatar className="h-10 w-10">
-                      <AvatarFallback className="bg-primary/10 text-primary">{conv.clientes.nome.charAt(0)}</AvatarFallback>
-                    </Avatar>
-                    <div className="flex-1 overflow-hidden">
-                      <div className="flex items-center justify-between">
-                        <h3 className="font-medium truncate text-sm">{conv.clientes.nome}</h3>
-                        <span className="text-xs text-muted-foreground">
-                          {conv.última_mensagem_at ? format(new Date(conv.última_mensagem_at), 'HH:mm') : ''}
-                        </span>
+                {conversas.length > 0 ? (
+                  conversas.map((conv) => (
+                    <div
+                      key={conv.id}
+                      onClick={() => setConversaAtiva(conv)}
+                      className={`p-4 cursor-pointer border-b hover:bg-accent transition-colors flex items-start gap-4 ${conversaAtiva?.id === conv.id ? 'bg-accent border-r-4 border-r-primary' : ''}`}
+                    >
+                      <Avatar className="h-10 w-10">
+                        <AvatarFallback className="bg-primary/10 text-primary">{conv.clientes.nome.charAt(0)}</AvatarFallback>
+                      </Avatar>
+                      <div className="flex-1 overflow-hidden">
+                        <div className="flex items-center justify-between">
+                          <h3 className="font-medium truncate text-sm">{conv.clientes.nome}</h3>
+                          <span className="text-[10px] text-muted-foreground">
+                            {conv.última_mensagem_at ? format(new Date(conv.última_mensagem_at), 'HH:mm') : ''}
+                          </span>
+                        </div>
+                        <Badge variant="secondary" className="text-[9px] h-4 px-1.5 mt-1">{conv.bots_config?.nome_bot}</Badge>
                       </div>
-                      <Badge variant="secondary" className="text-[10px] mt-1">{conv.bots_config?.nome_bot}</Badge>
                     </div>
+                  ))
+                ) : (
+                  <div className="p-8 text-center text-muted-foreground space-y-2">
+                    <Bot className="w-8 h-8 mx-auto opacity-20" />
+                    <p className="text-xs">Nenhuma conversa encontrada para o seu robô.</p>
                   </div>
-                ))}
+                )}
               </ScrollArea>
             </div>
 
@@ -429,11 +456,11 @@ export default function Dashboard() {
                   </div>
                   <div className="flex items-center gap-2">
                     {conversaAtiva.status === 'aberto' ? (
-                      <Button variant="outline" size="sm" className="text-destructive gap-2" onClick={fecharAtendimento}>
+                      <Button variant="outline" size="sm" className="text-destructive gap-2 h-8" onClick={fecharAtendimento}>
                         <XCircle className="w-4 h-4" /> Finalizar
                       </Button>
                     ) : (
-                      <Badge variant="secondary" className="gap-1"><CheckCircle2 className="w-3 h-3" /> ENCERRADO</Badge>
+                      <Badge variant="secondary" className="gap-1 h-6"><CheckCircle2 className="w-3 h-3" /> ENCERRADO</Badge>
                     )}
                   </div>
                 </div>
@@ -494,11 +521,11 @@ export default function Dashboard() {
                   </div>
 
                   {(sugestaoIA || carregandoIA) && modoMensagem === 'publico' && (
-                    <div className="absolute bottom-full left-0 right-0 p-3 bg-primary/5 border-t flex items-center gap-3 backdrop-blur-md">
+                    <div className="absolute bottom-full left-0 right-0 p-3 bg-primary/5 border-t flex items-center gap-3 backdrop-blur-md animate-in slide-in-from-bottom-2">
                       <Bot className={`w-5 h-5 text-primary ${carregandoIA ? 'animate-bounce' : ''}`} />
                       <div className="flex-1">
-                        <p className="text-[10px] font-bold text-primary">Sugestão da IA</p>
-                        {carregandoIA ? <div className="h-4 w-32 bg-primary/20 animate-pulse rounded" /> : <p className="text-xs italic">"{sugestaoIA}"</p>}
+                        <p className="text-[10px] font-bold text-primary uppercase">Sugestão da IA</p>
+                        {carregandoIA ? <div className="h-4 w-32 bg-primary/20 animate-pulse rounded" /> : <p className="text-xs italic font-medium">"{sugestaoIA}"</p>}
                       </div>
                       {!carregandoIA && <Button variant="outline" size="sm" className="text-[10px] h-7" onClick={() => setNovaMensagem(sugestaoIA || '')}>Usar</Button>}
                     </div>
@@ -506,122 +533,196 @@ export default function Dashboard() {
 
                   <form onSubmit={enviarMensagem} className="flex gap-2 items-center">
                     <div className="relative flex-1">
-                      <Input value={novaMensagem} onChange={(e) => setNovaMensagem(e.target.value)} placeholder="Digite..." className="rounded-full pr-12" disabled={refinandoIA} />
+                      <Input value={novaMensagem} onChange={(e) => setNovaMensagem(e.target.value)} placeholder="Digite sua mensagem..." className="rounded-full pr-12 h-10" disabled={refinandoIA} />
                       <Button type="button" variant="ghost" size="icon" className="absolute right-2 top-1/2 -translate-y-1/2" onClick={refinarMensagem} disabled={refinandoIA}>
-                        <Sparkles className={`h-4 w-4 ${refinandoIA ? 'animate-spin' : ''}`} />
+                        <Sparkles className={`h-4 w-4 ${refinandoIA ? 'animate-spin' : 'text-primary'}`} />
                       </Button>
                     </div>
-                    <Button type="submit" size="icon" className="rounded-full h-9 w-9" disabled={!novaMensagem.trim()}><Send className="h-4 w-4" /></Button>
+                    <Button type="submit" size="icon" className="rounded-full h-10 w-10 shrink-0" disabled={!novaMensagem.trim()}><Send className="h-4 w-4" /></Button>
                   </form>
                 </div>
               </div>
             ) : (
-              <div className="flex-1 flex items-center justify-center text-muted-foreground">Selecione uma conversa</div>
+              <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground space-y-4">
+                <div className="p-4 bg-muted rounded-full">
+                  <Bot className="w-12 h-12 opacity-20" />
+                </div>
+                <div className="text-center">
+                  <p className="text-sm font-medium">Bem-vindo ao Dashboard SISTLG</p>
+                  <p className="text-xs opacity-60">Selecione uma conversa ao lado para começar o atendimento.</p>
+                </div>
+              </div>
             )}
           </div>
         </TabsContent>
 
         {/* Conteúdo Aba Gerencial */}
-        <TabsContent value="gerencial" className="flex-1 overflow-y-auto m-0 p-8">
+        <TabsContent value="gerencial" className="flex-1 overflow-y-auto m-0 p-8 focus-visible:outline-none focus-visible:ring-0">
            <div className="max-w-6xl mx-auto space-y-8">
              <div className="flex items-center justify-between">
                 <div>
                    <h1 className="text-3xl font-bold tracking-tight">Dashboard Gerencial</h1>
-                   <p className="text-muted-foreground">Visualize o desempenho da equipe e métricas de satisfação.</p>
+                   <p className="text-muted-foreground italic">Monitoramento em tempo real de performance e satisfação.</p>
                 </div>
-                <Badge variant="outline" className="text-primary border-primary font-bold animate-pulse">LIVE</Badge>
+                <Badge variant="outline" className="text-primary border-primary font-bold animate-pulse px-3 py-1">REALTIME FEED</Badge>
              </div>
 
              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                <Card className="p-6 space-y-2 border-primary/10 shadow-lg shadow-primary/5">
+                <Card className="p-6 space-y-2 border-primary/10 shadow-lg shadow-primary/5 hover:border-primary/30 transition-all cursor-default">
                    <div className="flex items-center justify-between">
-                      <p className="text-xs font-medium text-muted-foreground uppercase">Atendimento Total</p>
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Atendimento Total</p>
                       <Users className="h-4 w-4 text-primary" />
                    </div>
-                   <div className="text-2xl font-bold">{metrics.totalAtendimentos}</div>
-                   <p className="text-xs text-green-500">+12% hoje</p>
+                   <div className="text-3xl font-black">{metrics.totalAtendimentos}</div>
+                   <p className="text-xs text-green-500 font-bold flex items-center gap-1">
+                     <TrendingUp className="w-3 h-3" /> +12% vs ontem
+                   </p>
                 </Card>
-                <Card className="p-6 space-y-2">
+                <Card className="p-6 space-y-2 border-transparent shadow-md hover:border-yellow-500/20 transition-all">
                    <div className="flex items-center justify-between">
-                      <p className="text-xs font-medium text-muted-foreground uppercase">CSAT Médio</p>
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">CSAT Médio</p>
                       <Star className="h-4 w-4 text-yellow-500" />
                    </div>
-                   <div className="text-2xl font-bold">{metrics.csatMedio.toFixed(1)} / 5.0</div>
-                   <div className="flex gap-0.5">
-                      {[1,2,3,4,5].map(s => <Star key={s} className={`h-3 w-3 ${s <= Math.round(metrics.csatMedio) ? 'fill-yellow-500 text-yellow-500' : 'text-muted-foreground'}`} />)}
+                   <div className="text-3xl font-black text-yellow-600">{metrics.csatMedio.toFixed(1)} <span className="text-sm text-muted-foreground font-medium">/ 5.0</span></div>
+                   <div className="flex gap-1 mt-1">
+                      {[1,2,3,4,5].map(s => <Star key={s} className={`h-3 w-3 ${s <= Math.round(metrics.csatMedio) ? 'fill-yellow-500 text-yellow-500' : 'text-muted-foreground/30'}`} />)}
                    </div>
                 </Card>
-                <Card className="p-6 space-y-2">
+                <Card className="p-6 space-y-2 border-transparent shadow-md">
                    <div className="flex items-center justify-between">
-                      <p className="text-xs font-medium text-muted-foreground uppercase">T. Médio Resposta</p>
-                      <Clock className="h-4 w-4 text-primary" />
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">T. Médio Resposta</p>
+                      <Clock className="h-4 w-4 text-blue-500" />
                    </div>
-                   <div className="text-2xl font-bold">2m 45s</div>
-                   <p className="text-xs text-green-500 font-medium">-15s vs meta</p>
+                   <div className="text-3xl font-black text-blue-600 font-mono">2m 45s</div>
+                   <p className="text-xs text-green-500 font-bold">-15s abaixo da meta</p>
                 </Card>
-                <Card className="p-6 space-y-2 shadow-inner bg-primary/5">
+                <Card className="p-6 space-y-2 shadow-inner bg-primary/5 border-primary/10">
                    <div className="flex items-center justify-between">
-                      <p className="text-xs font-bold text-primary uppercase">Conversão</p>
+                      <p className="text-xs font-bold text-primary uppercase tracking-widest">Conversão</p>
                       <TrendingUp className="h-4 w-4 text-primary" />
                    </div>
-                   <div className="text-2xl font-bold">94%</div>
-                   <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
-                      <div className="h-full bg-primary w-[94%]" />
+                   <div className="text-3xl font-black text-primary">94%</div>
+                   <div className="h-2 w-full bg-muted rounded-full overflow-hidden mt-2">
+                      <div className="h-full bg-primary w-[94%] transition-all duration-1000" />
                    </div>
                 </Card>
              </div>
 
-             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
-                <Card className="lg:col-span-4 p-6 border-primary/20 bg-card/50">
-                   <div className="flex items-center justify-between mb-6">
-                      <h2 className="text-xl font-bold flex items-center gap-2">
-                         <Trophy className="text-yellow-500" /> Ranking Gamificado
+             <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-7">
+                <Card className="lg:col-span-4 p-6 border-primary/10 bg-card/50 shadow-sm overflow-hidden">
+                   <div className="flex items-center justify-between mb-8">
+                      <h2 className="text-xl font-black flex items-center gap-3 tracking-tight">
+                         <div className="p-2 bg-yellow-500/10 rounded-lg"><Trophy className="text-yellow-600 w-5 h-5" /></div> 
+                         RANKING GAMIFICADO
                       </h2>
+                      <Badge variant="outline" className="rounded-full">EQUIPE ATIVA</Badge>
                    </div>
                    <Table>
-                      <TableHeader><TableRow>
-                        <TableHead className="w-[50px]">#</TableHead>
-                        <TableHead>Atendente</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead className="text-right">Pontos</TableHead>
+                      <TableHeader><TableRow className="border-b-2">
+                        <TableHead className="w-[60px] font-bold">POS</TableHead>
+                        <TableHead className="font-bold">ATENDENTE</TableHead>
+                        <TableHead className="font-bold">STATUS</TableHead>
+                        <TableHead className="text-right font-bold">SCORE</TableHead>
                       </TableRow></TableHeader>
                       <TableBody>
                          {atendentesRanking.map((at, idx) => (
-                            <TableRow key={at.id} className="hover:bg-primary/5 group">
-                               <TableCell className="font-bold text-muted-foreground">{idx + 1}º</TableCell>
+                            <TableRow key={at.id} className="hover:bg-primary/[0.02] border-b transition-colors group">
+                               <TableCell className={`font-black text-base ${idx === 0 ? 'text-yellow-500' : 'text-muted-foreground'}`}>{idx + 1}º</TableCell>
                                <TableCell>
                                   <div className="flex items-center gap-3">
-                                     <Avatar className="h-8 w-8 ring-2 ring-transparent group-hover:ring-primary/20 transition-all">
+                                     <Avatar className="h-9 w-9 ring-2 ring-transparent group-hover:ring-primary/20 transition-all duration-300">
+                                        <AvatarImage src={`https://api.dicebear.com/7.x/initials/svg?seed=${at.nome}`} />
                                         <AvatarFallback className="bg-primary/10 font-bold">{at.nome.charAt(0)}</AvatarFallback>
                                      </Avatar>
-                                     <span className="font-semibold">{at.nome}</span>
+                                     <span className="font-bold text-sm">{at.nome}</span>
                                   </div>
                                </TableCell>
-                               <TableCell><Badge variant={at.status === 'online' ? 'default' : 'secondary'}>{at.status}</Badge></TableCell>
-                               <TableCell className="text-right font-mono font-black text-primary text-base">{at.pontos_gamificacao}</TableCell>
+                               <TableCell>
+                                 <Badge variant={at.status === 'online' ? 'default' : 'secondary'} className={`uppercase text-[9px] font-black ${at.status === 'online' ? 'bg-green-600 hover:bg-green-700' : ''}`}>
+                                   {at.status}
+                                 </Badge>
+                               </TableCell>
+                               <TableCell className="text-right font-mono font-black text-primary text-xl tracking-tighter">{at.pontos_gamificacao}</TableCell>
                             </TableRow>
                          ))}
                       </TableBody>
                    </Table>
                 </Card>
 
-                <Card className="lg:col-span-3 p-6 border-primary/10">
-                   <h2 className="text-xl font-bold mb-6 flex items-center gap-2">
-                      <BarChart3 className="text-primary" /> Volume por Hora
+                <Card className="lg:col-span-3 p-6 border-primary/10 shadow-sm bg-card/50">
+                   <h2 className="text-xl font-black mb-8 flex items-center gap-3 tracking-tight">
+                      <div className="p-2 bg-primary/10 rounded-lg"><BarChart3 className="text-primary w-5 h-5" /></div> 
+                      VOLUME POR HORA
                    </h2>
-                   <div className="h-[300px] w-full">
+                   <div className="h-[320px] w-full">
                       <ResponsiveContainer width="100%" height="100%">
                          <BarChart data={statsVolume}>
                             <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.05} />
-                            <XAxis dataKey="nome" axisLine={false} tickLine={false} fontSize={10} />
+                            <XAxis dataKey="nome" axisLine={false} tickLine={false} fontSize={10} fontWeight="bold" />
                             <YAxis axisLine={false} tickLine={false} fontSize={10} hide />
-                            <ChartTooltip cursor={{fill: 'hsl(var(--primary)/0.1)'}} contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
-                            <Bar dataKey="volume" fill="hsl(var(--primary))" radius={[6, 6, 0, 0]} />
+                            <ChartTooltip cursor={{fill: 'hsl(var(--primary)/0.05)'}} contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)', fontWeight: 'bold' }} />
+                            <Bar dataKey="volume" fill="hsl(var(--primary))" radius={[8, 8, 0, 0]} className="transition-all duration-1000" />
                          </BarChart>
                       </ResponsiveContainer>
                    </div>
                 </Card>
              </div>
+           </div>
+        </TabsContent>
+
+        {/* Conteúdo Aba Configurações */}
+        <TabsContent value="configuracoes" className="flex-1 overflow-y-auto m-0 p-8 focus-visible:outline-none focus-visible:ring-0">
+           <div className="max-w-4xl mx-auto space-y-8">
+              <div>
+                 <h1 className="text-3xl font-bold tracking-tight">Configurações do Sistema</h1>
+                 <p className="text-muted-foreground">Gerencie parâmetros globais e integração com IA.</p>
+              </div>
+
+              <div className="grid gap-6">
+                 <Card className="p-6">
+                    <h3 className="text-lg font-semibold mb-4">Perfil do Atendente</h3>
+                    <div className="space-y-4">
+                       <div className="space-y-2">
+                          <label className="text-sm font-medium">Nome de Exibição</label>
+                          <Input defaultValue={perfilAtual?.nome} className="max-w-md" />
+                       </div>
+                       <div className="space-y-2">
+                          <label className="text-sm font-medium">Status de Atendimento</label>
+                          <div className="flex gap-2">
+                             <Button size="sm" variant="outline" className="bg-green-50/50 border-green-200 text-green-700">Disponível</Button>
+                             <Button size="sm" variant="outline">Em Pausa</Button>
+                          </div>
+                       </div>
+                    </div>
+                 </Card>
+
+                 <Card className="p-6">
+                    <h3 className="text-lg font-semibold mb-4">Integridade do Sistema</h3>
+                    <div className="space-y-4">
+                       <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                          <div className="flex items-center gap-3">
+                             <Bot className="w-5 h-5 text-primary" />
+                             <div>
+                                <p className="text-sm font-medium">Conexão Telegram</p>
+                                <p className="text-xs text-muted-foreground uppercase font-black text-green-600">Conectado</p>
+                             </div>
+                          </div>
+                          <Button variant="outline" size="sm">Testar Webhook</Button>
+                       </div>
+                       
+                       <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                          <div className="flex items-center gap-3">
+                             <Sparkles className="w-5 h-5 text-primary" />
+                             <div>
+                                <p className="text-sm font-medium">Motor de IA (OpenAI)</p>
+                                <p className="text-xs text-muted-foreground uppercase font-black text-yellow-600">Aguardando Chave</p>
+                             </div>
+                          </div>
+                          <Input placeholder="Insira seu Token..." className="max-w-[200px]" type="password" />
+                       </div>
+                    </div>
+                 </Card>
+              </div>
            </div>
         </TabsContent>
       </Tabs>
