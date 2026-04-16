@@ -33,48 +33,25 @@ export async function POST(
         const [, notaStr, conversaId] = data.split(':');
         const nota = parseInt(notaStr);
 
-        // Buscar dados da conversa para saber quem foi o atendente
-        const { data: conv, error: convErr } = await supabaseAdmin
+        const { data: conv } = await supabaseAdmin
           .from('conversas')
           .select('id, bot_id, bots_config(atendente_id)')
           .eq('id', conversaId)
           .single();
 
-        if (conv && !convErr) {
+        if (conv) {
           const atendenteId = (conv.bots_config as any).atendente_id;
-
-          // 1. Salvar a pesquisa
           await supabaseAdmin.from('pesquisas_satisfacao').insert({
             conversa_id: conversaId,
             atendente_id: atendenteId,
             nota: nota,
             mes_referencia: new Date().toISOString().slice(0, 7),
           });
-
-          // 2. Gamificação: Adicionar pontos ao atendente (Nota * 10)
-          const pontosGanhos = nota * 10;
-          await supabaseAdmin.rpc('increment_atendente_points', { 
-            atendente_row_id: atendenteId, 
-            pontos: pontosGanhos 
-          });
-
-          // 3. Responder ao Telegram
+          await supabaseAdmin.rpc('increment_atendente_points', { atendente_row_id: atendenteId, pontos: nota * 10 });
           await fetch(`https://api.telegram.org/bot${botConfig.token_telegram}/answerCallbackQuery`, {
              method: 'POST',
              headers: { 'Content-Type': 'application/json' },
-             body: JSON.stringify({ callback_query_id: callback.id, text: `Obrigado! Nota: ${nota} 🌟` }),
-          });
-
-          // 4. Editar mensagem original
-          await fetch(`https://api.telegram.org/bot${botConfig.token_telegram}/editMessageText`, {
-             method: 'POST',
-             headers: { 'Content-Type': 'application/json' },
-             body: JSON.stringify({
-               chat_id: callback.message.chat.id,
-               message_id: callback.message.message_id,
-               text: `Pesquisa Concluída: <b>${nota} estrelas</b>. Obrigado!`,
-               parse_mode: 'HTML',
-             }),
+             body: JSON.stringify({ callback_query_id: callback.id, text: `Nota: ${nota} 🌟` }),
           });
         }
       }
@@ -89,7 +66,7 @@ export async function POST(
     const from = message.from;
     const text = message.text || '';
 
-    // 3. Registrar/Atualizar Cliente
+    // 4. Registrar/Atualizar Cliente
     const { data: cliente, error: clientError } = await supabaseAdmin
       .from('clientes')
       .upsert({
@@ -102,23 +79,16 @@ export async function POST(
 
     if (clientError) throw clientError;
 
-    // 4. Fluxo LGPD (Primeiro Contato)
+    // 5. Fluxo LGPD (Primeiro Contato)
     if (!cliente.consentimento_lgpd) {
       const msgLGPD = "<b>Termos de Uso e Privacidade</b> 🛡️\n\n" +
-                      "Olá! Ao continuar este atendimento, você concorda com o tratamento dos seus dados para fins de suporte, conforme a LGPD.\n\n" +
-                      "Para ler nossos termos completos, acesse: <i>[LINK_DOS_TERMOS]</i>";
-      
+                      "Olá! Ao continuar este atendimento, você concorda com o tratamento dos seus dados para fins de suporte, conforme a LGPD.";
       await sendTelegramMessage(botConfig.token_telegram, chatId, msgLGPD);
-      
-      // Atualizar consentimento
-      await supabaseAdmin
-        .from('clientes')
-        .update({ consentimento_lgpd: true, data_consentimento: new Date().toISOString() })
-        .eq('id', cliente.id);
+      await supabaseAdmin.from('clientes').update({ consentimento_lgpd: true, data_consentimento: new Date().toISOString() }).eq('id', cliente.id);
     }
 
-    // 5. Buscar ou Criar Conversa (Sessão)
-    let { data: conversa, error: convError } = await supabaseAdmin
+    // 6. Buscar ou Criar Conversa (Sessão)
+    let { data: conversa } = await supabaseAdmin
       .from('conversas')
       .select('*')
       .eq('cliente_id', cliente.id)
@@ -127,39 +97,19 @@ export async function POST(
       .single();
 
     if (!conversa) {
-      const { data: newConv, error: newConvErr } = await supabaseAdmin
-        .from('conversas')
-        .insert({
-          cliente_id: cliente.id,
-          bot_id: botConfig.id,
-          status: 'aberto',
-        })
-        .select()
-        .single();
-      
-      if (newConvErr) throw newConvErr;
+      const { data: newConv } = await supabaseAdmin.from('conversas').insert({ cliente_id: cliente.id, bot_id: botConfig.id, status: 'aberto' }).select().single();
       conversa = newConv;
     }
 
-    // 5. IA: Gerar Embedding e Analisar Sentimento
-    let embedding = null;
+    // 7. IA: Análise de Sentimento
     let sentimento: 'positivo' | 'negativo' | 'neutro' = 'neutro';
-
     if (text.length > 0) {
       try {
-        // Rodar em paralelo para performance
-        const [embResult, sentResult] = await Promise.all([
-          generateEmbedding(text),
-          analyzeSentiment(text)
-        ]);
-        embedding = embResult;
-        sentimento = sentResult;
-      } catch (err) {
-        console.error('Erro ao processar IA:', err);
-      }
+        sentimento = await analyzeSentiment(text);
+      } catch (err) { console.error('Erro IA:', err); }
     }
 
-    // 6. Salvar Mensagem no Banco
+    // 8. Salvar Mensagem no Banco
     const { error: msgError } = await supabaseAdmin
       .from('mensagens')
       .insert({
@@ -167,38 +117,25 @@ export async function POST(
         remetente: 'cliente',
         tipo: 'texto',
         conteudo: text,
-        embedding: embedding,
         sentimento: sentimento,
       });
 
     if (msgError) throw msgError;
 
-    // 7. Verificar Horário de Atendimento
+    // 9. Verificar Horário de Atendimento
     if (!isOperational()) {
       const msgFechado = "Olá! No momento estamos fora do nosso horário de atendimento.\n\n" +
-                         "<b>Nossos horários:</b>\n" +
-                         "Seg-Sex: 08:00 às 23:00\n" +
-                         "Sáb-Dom: 18:00 às 23:00\n\n" +
-                         "Sua mensagem foi recebida e responderemos assim que possível!";
-      
+                         "Seg-Sex: 08:00 às 23:00\nSáb-Dom: 18:00 às 23:00";
       await sendTelegramMessage(botConfig.token_telegram, chatId, msgFechado);
-      
       return NextResponse.json({ ok: true, status: 'closed' });
     }
 
-    // 8. Resposta Inteligente IA (Autônomo)
+    // 10. Resposta Inteligente IA (Se Ativada)
     if (botConfig.is_active && text.length > 0) {
       try {
-        // Gerar resposta com base no contexto
-        const aiResponse = await generateAIResponse([
-          { role: 'user', content: text }
-        ], botConfig.nome_bot);
-
+        const aiResponse = await generateAIResponse([{ role: 'user', content: text }], botConfig.nome_bot);
         if (aiResponse) {
-          // 1. Enviar para o Telegram
           await sendTelegramMessage(botConfig.token_telegram, chatId, aiResponse);
-
-          // 2. Salvar no banco
           await supabaseAdmin.from('mensagens').insert({
             conversa_id: conversa.id,
             remetente: 'bot',
@@ -206,9 +143,7 @@ export async function POST(
             conteudo: aiResponse,
           });
         }
-      } catch (err) {
-        console.error('Erro no fluxo autônomo da IA:', err);
-      }
+      } catch (err) { console.error('Erro Resposta IA:', err); }
     }
 
     return NextResponse.json({ ok: true, status: 'received' });

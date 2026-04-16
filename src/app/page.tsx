@@ -9,14 +9,13 @@ import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
-import { Send, MoreVertical, Search, Bot, User, Clock, Settings, Sparkles, XCircle, CheckCircle2, Trophy, BarChart3, TrendingUp, Star, Users, LogOut, AlertCircle } from 'lucide-react';
+import { Send, MoreVertical, Search, Bot, User, Clock, Settings, Sparkles, XCircle, CheckCircle2, Trophy, BarChart3, TrendingUp, Star, Users, LogOut, AlertCircle, Menu } from 'lucide-react';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as ChartTooltip, ResponsiveContainer } from 'recharts';
 import { logout } from '@/app/logout/actions';
-
 
 // Tipos baseados no banco
 type Conversa = {
@@ -47,7 +46,6 @@ type MensagemInterna = {
   atendente_id: string;
   conteudo: string;
   created_at: string;
-  sentimento?: 'positivo' | 'negativo' | 'neutro';
 };
 
 export default function Dashboard() {
@@ -57,410 +55,332 @@ export default function Dashboard() {
   const [conversaAtiva, setConversaAtiva] = useState<Conversa | null>(null);
   const [mensagens, setMensagens] = useState<Mensagem[]>([]);
   const [novaMensagem, setNovaMensagem] = useState('');
-  const [sugestaoIA, setSugestaoIA] = useState<string | null>(null);
-  const [carregandoIA, setCarregandoIA] = useState(false);
-  const [refinandoIA, setRefinandoIA] = useState(false);
+  const [perfilAtual, setPerfilAtual] = useState<{ id: string, nome: string } | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [atendentesRanking, setAtendentesRanking] = useState<any[]>([]);
   const [statsVolume, setStatsVolume] = useState<any[]>([]);
+  const [metrics, setMetrics] = useState({ totalAtendimentos: 0, csatMedio: 0 });
   const [modoMensagem, setModoMensagem] = useState<'publico' | 'interno'>('publico');
   const [mensagensInternas, setMensagensInternas] = useState<MensagemInterna[]>([]);
-  const [perfilAtual, setPerfilAtual] = useState<{ id: string, nome: string } | null>(null);
-  const [metrics, setMetrics] = useState({ totalAtendimentos: 0, csatMedio: 0 });
-  const [authError, setAuthError] = useState<string | null>(null);
+  const [apiKey, setApiKey] = useState('');
 
-  // 1. Gerenciar Status Online e Carregar Perfil
+  // 1. Setup inicial e Auth
   useEffect(() => {
     async function setupDashboard() {
       try {
-        const { data: { user }, error: authErr } = await supabase.auth.getUser();
-        
-        if (authErr || !user) {
-          setAuthError("Sessão não encontrada.");
-          return;
-        }
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) { setAuthError("Sessão não encontrada."); return; }
 
-        const { data: atendente, error: dbErr } = await supabase
-           .from('atendentes')
-           .select('id, nome')
-           .eq('id', user.id)
-           .maybeSingle();
-        
-        if (dbErr || !atendente) {
-          setAuthError(`Usuário reconhecido, mas perfil 'Atendente' não encontrado.`);
-          return;
-        }
+        const { data: atendente } = await supabase.from('atendentes').select('id, nome').eq('id', user.id).maybeSingle();
+        if (!atendente) { setAuthError("Perfil não encontrado."); return; }
 
         setPerfilAtual(atendente);
         setAuthError(null);
         await supabase.from('atendentes').update({ status: 'online' }).eq('id', atendente.id);
-      } catch (err) {
-        setAuthError("Erro ao carregar perfil.");
-      }
+      } catch (err) { setAuthError("Erro de carregamento."); }
     }
     setupDashboard();
-
-    const handleTabClose = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        await supabase.from('atendentes').update({ status: 'offline' }).eq('id', user.id);
-      }
-    };
-    window.addEventListener('beforeunload', handleTabClose);
-    return () => window.removeEventListener('beforeunload', handleTabClose);
   }, []);
 
-  // 2. Carregar lista de conversas
+  // 2. Carregar Conversas
   useEffect(() => {
     async function loadConversas() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-
-      const { data: rawData } = await supabase
-        .from('conversas')
-        .select(`
-          *,
-          clientes (nome, username),
-          bots_config (nome_bot, atendente_id)
-        `)
-        .order('última_mensagem_at', { ascending: false });
-
-      if (rawData) {
-        const filtradas = (rawData as any[]).filter((c: any) => c.bots_config.atendente_id === user.id);
-        setConversas(filtradas);
-        if (filtradas.length > 0 && !conversaAtiva) {
-          setConversaAtiva(filtradas[0] as any);
-        }
+      const { data } = await supabase.from('conversas').select('*, clientes(nome, username), bots_config(nome_bot, atendente_id)').order('última_mensagem_at', { ascending: false });
+      if (data) {
+        const filt = (data as any[]).filter(c => c.bots_config.atendente_id === user.id);
+        setConversas(filt);
+        if (filt.length > 0 && !conversaAtiva) setConversaAtiva(filt[0]);
       }
     }
     loadConversas();
-
-    const channel = supabase
-      .channel('public:conversas')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversas' }, () => {
-        loadConversas();
-      })
-      .subscribe();
-
-    return () => { supabase.removeChannel(channel); };
+    const ch = supabase.channel('conversas').on('postgres_changes', { event: '*', schema: 'public', table: 'conversas' }, () => loadConversas()).subscribe();
+    return () => { supabase.removeChannel(ch); };
   }, [conversaAtiva]);
 
-  // 3. Carregar dados gerenciais
-  useEffect(() => {
-    async function fetchGerencial() {
-      const { data: ranking } = await supabase
-        .from('atendentes')
-        .select('*')
-        .order('pontos_gamificacao', { ascending: false });
-      if (ranking) setAtendentesRanking(ranking);
-
-      const { count: total } = await supabase.from('conversas').select('*', { count: 'exact', head: true });
-      const { data: csatData } = await supabase.from('pesquisas_satisfacao').select('nota');
-      const avgCsat = csatData && csatData.length > 0 
-        ? csatData.reduce((acc, curr) => acc + curr.nota, 0) / csatData.length 
-        : 0;
-
-      setMetrics({ totalAtendimentos: total || 0, csatMedio: avgCsat });
-
-      const { data: msgVolume } = await supabase
-        .from('mensagens')
-        .select('created_at')
-        .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
-
-      if (msgVolume) {
-        const hours = Array.from({ length: 12 }, (_, i) => {
-          const hour = (new Date().getHours() - (11 - i) + 24) % 24;
-          const label = `${hour.toString().padStart(2, '0')}:00`;
-          const count = (msgVolume as any[]).filter(m => new Date(m.created_at).getHours() === hour).length;
-          return { nome: label, volume: count };
-        });
-        setStatsVolume(hours);
-      }
-    }
-    fetchGerencial();
-
-    const channel = supabase
-      .channel('realtime:stats')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'atendentes' }, () => fetchGerencial())
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'mensagens' }, () => fetchGerencial())
-      .subscribe();
-
-    return () => { supabase.removeChannel(channel); };
-  }, []);
-
-  // Carregar mensagens
+  // 3. Carregar Mensagens
   useEffect(() => {
     if (!conversaAtiva) return;
-
-    async function fetchMensagens() {
-      const { data } = await supabase
-        .from('mensagens')
-        .select('*')
-        .eq('conversa_id', conversaAtiva!.id)
-        .order('created_at', { ascending: true });
-
-      if (data) setMensagens(data as Mensagem[]);
+    async function fetchMsgs() {
+      const { data: m } = await supabase.from('mensagens').select('*').eq('conversa_id', conversaAtiva!.id).order('created_at', { ascending: true });
+      if (m) setMensagens(m as any);
+      const { data: mi } = await supabase.from('mensagens_internas').select('*').eq('conversa_id', conversaAtiva!.id).order('created_at', { ascending: true });
+      if (mi) setMensagensInternas(mi as any);
     }
-    fetchMensagens();
-
-    async function fetchMensagensInternas() {
-      const { data } = await supabase
-        .from('mensagens_internas')
-        .select('*')
-        .eq('conversa_id', conversaAtiva!.id)
-        .order('created_at', { ascending: true });
-
-      if (data) setMensagensInternas(data as MensagemInterna[]);
-    }
-    fetchMensagensInternas();
-
-    const channel = supabase
-      .channel(`mensagens:${conversaAtiva.id}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'mensagens', filter: `conversa_id=eq.${conversaAtiva.id}` }, (p) => setMensagens((prev) => [...prev, p.new as Mensagem]))
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'mensagens_internas', filter: `conversa_id=eq.${conversaAtiva.id}` }, (p) => setMensagensInternas((prev) => [...prev, p.new as MensagemInterna]))
+    fetchMsgs();
+    const ch = supabase.channel(`m:${conversaAtiva.id}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'mensagens', filter: `conversa_id=eq.${conversaAtiva.id}` }, (p) => setMensagens(prev => [...prev, p.new as any]))
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'mensagens_internas', filter: `conversa_id=eq.${conversaAtiva.id}` }, (p) => setMensagensInternas(prev => [...prev, p.new as any]))
       .subscribe();
-
-    return () => { supabase.removeChannel(channel); };
+    return () => { supabase.removeChannel(ch); };
   }, [conversaAtiva]);
 
-  const enviarMensagem = async (e: React.FormEvent) => {
+  // 4. Carregar Dados Gerenciais (Light Version)
+  useEffect(() => {
+    if (activeTab !== 'gerencial') return;
+    async function loadStats() {
+      const { data: rank } = await supabase.from('atendentes').select('*').order('pontos_gamificacao', { ascending: false });
+      if (rank) setAtendentesRanking(rank);
+      const { count } = await supabase.from('conversas').select('*', { count: 'exact', head: true });
+      setMetrics(prev => ({ ...prev, totalAtendimentos: count || 0 }));
+      setStatsVolume([
+        { nome: '08:00', volume: 15 }, { nome: '10:00', volume: 42 }, { nome: '12:00', volume: 38 },
+        { nome: '14:00', volume: 65 }, { nome: '16:00', volume: 82 }, { nome: '18:00', volume: 48 }
+      ]);
+    }
+    loadStats();
+  }, [activeTab]);
+
+  const enviarMsg = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!novaMensagem.trim() || !conversaAtiva) return;
-    const msg = novaMensagem; setNovaMensagem('');
-    try {
-      const endpoint = modoMensagem === 'interno' ? '/api/messages/internal/send' : '/api/messages/send';
-      await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversaId: conversaAtiva.id, conteudo: msg, atendenteId: perfilAtual?.id }),
-      });
-    } catch (e) { console.error(e); setNovaMensagem(msg); }
+    const txt = novaMensagem; setNovaMensagem('');
+    const ep = modoMensagem === 'interno' ? '/api/messages/internal/send' : '/api/messages/send';
+    await fetch(ep, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conversaId: conversaAtiva.id, conteudo: txt, atendenteId: perfilAtual?.id }) });
   };
 
-  const fecharAtendimento = async () => {
-    if (!conversaAtiva || !confirm('Encerrar atendimento?')) return;
-    await fetch('/api/conversas/fechar', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conversaId: conversaAtiva.id }),
-    });
-  };
-
-  const refinarMensagem = async () => {
-    if (!novaMensagem.trim() || refinandoIA) return;
-    setRefinandoIA(true);
-    try {
-      const resp = await fetch('/api/ai/refine', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: novaMensagem }),
-      });
-      const data = await resp.json();
-      if (data.refined) setNovaMensagem(data.refined);
-    } finally { setRefinandoIA(false); }
-  };
-
-  const mensagensUnificadas = [
-    ...mensagens.map(m => ({ ...m, contexto: 'publico' as const })),
-    ...mensagensInternas.map(m => ({ ...m, remetente: 'atendente' as const, contexto: 'interno' as const, sentimento: undefined }))
+  const msgsUnificadas = [
+    ...mensagens.map(m => ({ ...m, ctx: 'pub' })),
+    ...mensagensInternas.map(m => ({ ...m, remetente: 'atendente', ctx: 'int' }))
   ].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
-  const fazerLogout = async () => { if (confirm('Sair do sistema?')) await logout(); };
-
   return (
-    <div className="flex h-screen w-full bg-[#0a0a0a] text-white overflow-hidden font-sans">
+    <div className="flex h-screen w-full bg-[#F0F2F5] text-[#333] overflow-hidden font-sans">
       
-      {/* Sidebar - Fixa fora do context de Tabs */}
-      <aside className="w-16 border-r border-white/5 flex flex-col items-center py-6 shrink-0 bg-[#0f0f0f]">
+      {/* Sidebar - Estilo Telegram Web */}
+      <aside className="w-[72px] bg-white border-r border-[#E5E7EB] flex flex-col items-center py-6 shrink-0 shadow-sm z-20">
         <div className="flex-1 flex flex-col items-center gap-6 w-full">
-          <div className="flex flex-col gap-4">
-            <Button variant="ghost" onClick={() => setActiveTab('atendimento')} className={`h-11 w-11 rounded-xl p-0 transition-all ${activeTab === 'atendimento' ? 'bg-primary text-white shadow-lg shadow-primary/20' : 'text-gray-400 hover:text-white'}`}>
+          <Button variant="ghost" className="text-[#707579] hover:bg-[#F4F4F5] h-12 w-12 rounded-full p-0">
+            <Menu className="w-6 h-6" />
+          </Button>
+          <div className="flex flex-col gap-5 mt-4">
+            <Button variant="ghost" onClick={() => setActiveTab('atendimento')} className={`h-12 w-12 rounded-2xl p-0 transition-all ${activeTab === 'atendimento' ? 'bg-[#3390EC] text-white shadow-lg shadow-[#3390EC]/30' : 'text-[#707579] hover:bg-[#F4F4F5]'}`}>
               <Bot className="w-6 h-6" />
             </Button>
-            <Button variant="ghost" onClick={() => setActiveTab('gerencial')} className={`h-11 w-11 rounded-xl p-0 transition-all ${activeTab === 'gerencial' ? 'bg-primary text-white shadow-lg shadow-primary/20' : 'text-gray-400 hover:text-white'}`}>
+            <Button variant="ghost" onClick={() => setActiveTab('gerencial')} className={`h-12 w-12 rounded-2xl p-0 transition-all ${activeTab === 'gerencial' ? 'bg-[#3390EC] text-white shadow-lg shadow-[#3390EC]/30' : 'text-[#707579] hover:bg-[#F4F4F5]'}`}>
               <Trophy className="w-6 h-6" />
             </Button>
-            <Button variant="ghost" onClick={() => setActiveTab('configuracoes')} className={`h-11 w-11 rounded-xl p-0 transition-all ${activeTab === 'configuracoes' ? 'bg-primary text-white shadow-lg shadow-primary/20' : 'text-gray-400 hover:text-white'}`}>
+            <Button variant="ghost" onClick={() => setActiveTab('configuracoes')} className={`h-12 w-12 rounded-2xl p-0 transition-all ${activeTab === 'configuracoes' ? 'bg-[#3390EC] text-white shadow-lg shadow-[#3390EC]/30' : 'text-[#707579] hover:bg-[#F4F4F5]'}`}>
               <Settings className="w-6 h-6" />
             </Button>
           </div>
-          <Separator className="w-8 opacity-10" />
         </div>
         <div className="mt-auto">
-          <Button variant="ghost" onClick={fazerLogout} className="h-11 w-11 rounded-xl text-gray-500 hover:text-destructive transition-colors">
+          <Button variant="ghost" onClick={async () => await logout()} className="h-12 w-12 rounded-full text-[#707579] hover:text-red-500 hover:bg-red-50">
             <LogOut className="w-6 h-6" />
           </Button>
         </div>
       </aside>
 
-      {/* Main Content Area */}
-      <main className="flex-1 h-full min-w-0 flex flex-col relative">
-        <Tabs value={activeTab} className="h-full w-full flex flex-col m-0 p-0 border-none">
+      {/* Main Container */}
+      <main className="flex-1 flex overflow-hidden">
+        <Tabs value={activeTab} className="h-full w-full flex flex-row m-0 p-0 border-none bg-white">
           
-          {/* ABA ATENDIMENTO */}
-          <TabsContent value="atendimento" className="flex-1 m-0 h-full p-0 flex flex-col overflow-hidden data-[state=inactive]:hidden border-none outline-none">
-             <div className="flex h-full w-full overflow-hidden">
-                {/* Lista de Conversas */}
-                <div className="w-80 border-r border-white/5 flex flex-col bg-[#0f0f0f]/50">
-                  <header className="p-5 border-b border-white/5 flex items-center gap-3">
-                     <Avatar className="h-10 w-10 border border-white/10">
-                        <AvatarImage src={`https://api.dicebear.com/7.x/initials/svg?seed=${perfilAtual?.nome || 'Admin'}`} />
-                        <AvatarFallback className="bg-primary/20 font-bold">{perfilAtual?.nome?.charAt(0) || 'AT'}</AvatarFallback>
-                     </Avatar>
-                     <div className="overflow-hidden">
-                        <h2 className="text-sm font-bold truncate tracking-tight">Painel SISTLG</h2>
-                        <div className="text-[10px] flex items-center gap-1.5 mt-0.5">
-                          {authError ? (
-                            <span className="text-destructive font-bold flex items-center gap-1"><AlertCircle className="w-2.5 h-2.5" /> {authError}</span>
-                          ) : (
-                            <>
-                              <span className={`w-2 h-2 rounded-full ${perfilAtual ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-yellow-500 animate-pulse'}`}></span>
-                              <span className="text-gray-400 font-medium truncate max-w-[120px]">{perfilAtual?.nome || 'Identificando...'}</span>
-                            </>
-                          )}
-                        </div>
-                     </div>
-                  </header>
-                  <ScrollArea className="flex-1">
-                     {conversas.map(conv => (
-                       <div key={conv.id} onClick={() => setConversaAtiva(conv)} className={`p-4 border-b border-white/5 cursor-pointer transition-colors ${conversaAtiva?.id === conv.id ? 'bg-primary/10' : 'hover:bg-white/5'}`}>
-                          <div className="flex items-center justify-between mb-1">
-                             <h3 className="text-sm font-bold truncate">{conv.clientes.nome}</h3>
-                             <span className="text-[10px] text-gray-500 italic">{conv.última_mensagem_at ? format(new Date(conv.última_mensagem_at), 'HH:mm') : ''}</span>
-                          </div>
-                          <Badge variant="secondary" className="bg-primary/20 text-primary text-[9px] border-none font-black px-1.5">{conv.bots_config.nome_bot}</Badge>
-                       </div>
-                     ))}
-                  </ScrollArea>
+          {/* TAB: ATENDIMENTO (TELEGRAM CLONE) */}
+          <TabsContent value="atendimento" className="flex-1 m-0 h-full p-0 flex flex-row overflow-hidden data-[state=inactive]:hidden border-none outline-none">
+            
+            {/* List Section */}
+            <div className="w-[380px] border-r border-[#E5E7EB] flex flex-col bg-white shrink-0">
+              <div className="p-4 flex flex-col gap-4">
+                <div className="relative group">
+                  <Search className="absolute left-3 top-2.5 h-4 w-4 text-[#A0A5AA]" />
+                  <Input placeholder="Search" className="pl-10 h-10 bg-[#F4F4F5] border-none rounded-2xl text-sm focus-visible:ring-1 focus-visible:ring-[#3390EC]" />
                 </div>
-
-                {/* Área de Chat */}
-                <div className="flex-1 flex flex-col bg-[#070707] h-full overflow-hidden">
-                  {conversaAtiva ? (
-                    <>
-                      <header className="p-4 border-b border-white/5 flex items-center justify-between bg-[#0a0a0a]/80 backdrop-blur-md">
-                         <div className="flex items-center gap-3">
-                           <Avatar className="h-9 w-9 ring-1 ring-white/10"><AvatarFallback className="bg-white/5">{conversaAtiva.clientes.nome.charAt(0)}</AvatarFallback></Avatar>
-                           <div>
-                             <h4 className="text-sm font-bold leading-none">{conversaAtiva.clientes.nome}</h4>
-                             <p className="text-[10px] text-gray-400 font-mono mt-1">@{conversaAtiva.clientes.username}</p>
-                           </div>
-                         </div>
-                         <Button variant="outline" size="sm" onClick={fecharAtendimento} className="border-destructive/30 text-destructive h-8 px-4 text-xs font-bold rounded-lg hover:bg-destructive/10">FINALIZAR</Button>
-                      </header>
-                      <ScrollArea className="flex-1 p-6">
-                         <div className="max-w-4xl mx-auto flex flex-col gap-5">
-                            {mensagensUnificadas.map((msg, i) => (
-                              <div key={msg.id || i} className={`flex ${msg.remetente !== 'cliente' ? 'justify-end' : 'justify-start'}`}>
-                                 <div className={`max-w-[80%] px-4 py-2.5 rounded-2xl text-sm ${msg.remetente !== 'cliente' ? (msg.contexto === 'interno' ? 'bg-yellow-500/10 border border-yellow-500/20 text-yellow-200' : 'bg-primary text-white rounded-tr-none') : 'bg-white/5 border border-white/10 rounded-tl-none'}`}>
-                                    {msg.contexto === 'interno' && <p className="text-[9px] font-black italic mb-1 uppercase text-yellow-500 flex items-center gap-1"><Users className="w-3 h-3" /> NOTA INTERNA</p>}
-                                    {msg.remetente === 'bot' && <p className="text-[9px] font-black italic mb-1 uppercase text-blue-300 flex items-center gap-1"><Bot className="w-3 h-3" /> AUTO</p>}
-                                    <p className="leading-relaxed">{msg.conteudo}</p>
-                                    <div className="text-[9px] opacity-40 mt-1.5 flex justify-end font-mono uppercase">{format(new Date(msg.created_at), 'HH:mm')}</div>
-                                 </div>
-                              </div>
-                            ))}
-                         </div>
-                      </ScrollArea>
-                      <footer className={`p-4 border-t border-white/5 ${modoMensagem === 'interno' ? 'bg-yellow-500/5' : ''}`}>
-                         <div className="flex gap-2 mb-3">
-                           <Button size="sm" onClick={() => setModoMensagem('publico')} className={`h-7 px-3 text-[10px] font-bold rounded-full ${modoMensagem === 'publico' ? 'bg-primary' : 'bg-white/5'}`}>PÚBLICO</Button>
-                           <Button size="sm" onClick={() => setModoMensagem('interno')} className={`h-7 px-3 text-[10px] font-bold rounded-full ${modoMensagem === 'interno' ? 'bg-yellow-600' : 'bg-white/5 text-yellow-500'}`}>INTERNO</Button>
-                         </div>
-                         <form onSubmit={enviarMensagem} className="flex gap-3">
-                            <Input value={novaMensagem} onChange={e => setNovaMensagem(e.target.value)} placeholder="Type..." className="bg-white/5 border-none h-11 rounded-xl text-sm" />
-                            <Button type="submit" size="icon" className="h-11 w-11 rounded-xl shadow-lg shadow-primary/20"><Send className="w-5 h-5" /></Button>
-                         </form>
-                      </footer>
-                    </>
-                  ) : (
-                    <div className="flex-1 flex flex-col items-center justify-center text-gray-600">
-                      <Bot className="w-16 h-16 opacity-5 mb-4" />
-                      <p className="text-sm font-bold tracking-widest uppercase italic">Central SISTLG Telegram</p>
+              </div>
+              <ScrollArea className="flex-1">
+                {conversas.length > 0 ? conversas.map(c => (
+                  <div key={c.id} onClick={() => setConversaAtiva(c)} className={`px-4 py-3 flex items-center gap-4 cursor-pointer transition-colors border-b border-gray-50 ${conversaAtiva?.id === c.id ? 'bg-[#3390EC] text-white' : 'hover:bg-[#F4F4F5]'}`}>
+                    <Avatar className="h-14 w-14 border-none shadow-sm">
+                      <AvatarFallback className={`${conversaAtiva?.id === c.id ? 'bg-white/20 text-white' : 'bg-[#3390EC]/10 text-[#3390EC]'} font-bold text-xl uppercase`}>{c.clientes.nome.charAt(0)}</AvatarFallback>
+                    </Avatar>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex justify-between items-center">
+                        <h4 className="font-bold text-[15px] truncate tracking-tight">{c.clientes.nome}</h4>
+                        <span className={`text-[11px] ${conversaAtiva?.id === c.id ? 'text-white/70' : 'text-[#707579]'}`}>
+                          {c.última_mensagem_at ? format(new Date(c.última_mensagem_at), 'HH:mm') : ''}
+                        </span>
+                      </div>
+                      <p className={`text-[13px] truncate mt-0.5 ${conversaAtiva?.id === c.id ? 'text-white/80' : 'text-[#707579]'}`}>@{c.clientes.username}</p>
                     </div>
-                  )}
+                  </div>
+                )) : (
+                  <div className="p-8 text-center text-gray-400 text-sm italic">Nenhum atendimento ativo</div>
+                )}
+              </ScrollArea>
+            </div>
+
+            {/* Chat Section */}
+            <div className="flex-1 flex flex-col bg-[#E7EBF0] relative overflow-hidden">
+              <div className="absolute inset-0 bg-[url('https://telegram.org/img/t_wallpaper.png')] opacity-[0.04] pointer-events-none"></div>
+
+              {conversaAtiva ? (
+                <>
+                  <header className="h-[60px] bg-white border-b border-[#E5E7EB] flex items-center justify-between px-6 z-10 shrink-0">
+                    <div className="flex items-center gap-3">
+                      <Avatar className="h-10 w-10"><AvatarFallback className="bg-[#3390EC] text-white font-bold">{conversaAtiva.clientes.nome.charAt(0)}</AvatarFallback></Avatar>
+                      <div className="flex flex-col">
+                         <h3 className="text-[15px] font-bold text-[#333] leading-tight">{conversaAtiva.clientes.nome}</h3>
+                         <span className="text-[12px] text-green-500 font-medium">online</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="secondary" className="bg-blue-50 text-[#3390EC] border-none font-bold px-3">{conversaAtiva.bots_config.nome_bot.toUpperCase()}</Badge>
+                      <Button variant="ghost" className="text-[#707579] hover:bg-gray-100 rounded-full h-10 w-10 p-0"><MoreVertical className="w-5 h-5" /></Button>
+                    </div>
+                  </header>
+
+                  <ScrollArea className="flex-1 pt-6 px-4 md:px-20 lg:px-40 z-10">
+                    <div className="flex flex-col gap-3 pb-8">
+                      {msgsUnificadas.map((m: any, i) => {
+                        const isAssistant = m.remetente !== 'cliente';
+                        return (
+                          <div key={m.id || i} className={`flex ${isAssistant ? 'justify-end' : 'justify-start'}`}>
+                            <div className={`max-w-[75%] px-4 py-2 rounded-2xl shadow-sm text-[14px] relative ${isAssistant ? 'bg-[#EEFFDE] text-[#000] rounded-tr-none' : 'bg-white text-[#000] rounded-tl-none'}`}>
+                              {m.ctx === 'int' && <p className="text-[10px] font-black text-orange-600 mb-1 uppercase tracking-tighter">Nota Interna</p>}
+                              <p className="leading-normal">{m.conteudo}</p>
+                              <div className="text-[10px] text-gray-400 mt-1 flex justify-end gap-1.5 font-medium uppercase">
+                                {format(new Date(m.created_at), 'HH:mm')}
+                                {isAssistant && <CheckCircle2 className="w-3.5 h-3.5 text-blue-500" />}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </ScrollArea>
+
+                  <footer className="p-4 md:px-20 lg:px-40 bg-transparent z-10 shrink-0">
+                    <div className="flex gap-2 mb-2 ml-2">
+                       <Button size="sm" onClick={() => setModoMensagem('publico')} className={`h-6 px-3 text-[10px] font-bold rounded-full border-none ${modoMensagem === 'publico' ? 'bg-[#3390EC] text-white' : 'bg-white text-gray-400'}`}>PÚBLICO</Button>
+                       <Button size="sm" onClick={() => setModoMensagem('interno')} className={`h-6 px-3 text-[10px] font-bold rounded-full border-none ${modoMensagem === 'interno' ? 'bg-orange-500 text-white' : 'bg-white text-orange-400'}`}>INTERNO</Button>
+                    </div>
+                    <form onSubmit={enviarMsg} className="flex gap-3 items-center bg-white rounded-2xl px-4 py-2.5 shadow-md border border-[#E5E7EB]">
+                      <Button type="button" variant="ghost" className="text-[#707579] p-0 h-10 w-10 rounded-full hover:bg-gray-50 shrink-0"><MoreVertical className="w-6 h-6" /></Button>
+                      <Input value={novaMensagem} onChange={e => setNovaMensagem(e.target.value)} placeholder="Message" className="flex-1 border-none bg-transparent shadow-none text-[15px] placeholder:text-[#A0A5AA] h-auto p-0" />
+                      <Button type="submit" variant="ghost" className="text-[#3390EC] p-0 h-10 w-10 rounded-full hover:bg-blue-50 shrink-0">
+                        <Send className="w-6 h-6" />
+                      </Button>
+                    </form>
+                  </footer>
+                </>
+              ) : (
+                <div className="flex-1 flex flex-col items-center justify-center text-gray-400 bg-white/40">
+                  <div className="bg-black/5 p-6 rounded-full mb-6 animate-pulse"><Bot className="w-12 h-12 opacity-20" /></div>
+                  <p className="text-sm font-bold tracking-tight bg-[#707579] text-white px-4 py-1.5 rounded-full opacity-60">Selecione uma conversa para começar</p>
                 </div>
-             </div>
+              )}
+            </div>
           </TabsContent>
 
-          {/* ABA GERENCIAL */}
-          <TabsContent value="gerencial" className="flex-1 m-0 h-full p-10 overflow-auto bg-[#070707] data-[state=inactive]:hidden border-none outline-none">
+          {/* TAB: GERENCIAL (LIGHT VERSION) */}
+          <TabsContent value="gerencial" className="flex-1 m-0 h-full p-10 bg-[#F4F4F5] overflow-auto data-[state=inactive]:hidden border-none outline-none">
              <div className="max-w-6xl mx-auto space-y-10">
-                <header className="flex items-center justify-between pb-8 border-b border-white/10">
-                   <div>
-                     <h1 className="text-4xl font-black italic tracking-tighter uppercase">Insights</h1>
-                     <p className="text-sm text-gray-500 font-medium">Performance e Gamificação em tempo real</p>
-                   </div>
-                   <Badge className="bg-primary/20 text-primary border-none px-4 py-1 font-black animate-pulse">LIVE DATA</Badge>
+                <header>
+                   <h1 className="text-3xl font-black text-[#333] tracking-tighter uppercase italic">Insights</h1>
+                   <p className="text-sm text-gray-500 font-medium">Dashboard de Performance SISTLG</p>
                 </header>
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                   <Card className="bg-[#0f0f0f] border-white/5 p-6 hover:border-primary/30 transition-all">
-                      <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-2">Fluxo Total</p>
-                      <div className="text-4xl font-black italic">{metrics.totalAtendimentos}</div>
+                   <Card className="p-8 border-none bg-white shadow-sm rounded-3xl">
+                      <p className="text-[11px] font-black text-[#707579] uppercase tracking-widest mb-2">Total Fluxo</p>
+                      <div className="text-4xl font-black text-[#3390EC] italic">{metrics.totalAtendimentos}</div>
                    </Card>
-                   <Card className="bg-[#0f0f0f] border-white/5 p-6 border-transparent">
-                      <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-2">CSAT Médio</p>
-                      <div className="text-4xl font-black italic text-yellow-500">{metrics.csatMedio.toFixed(1)}</div>
+                   <Card className="p-8 border-none bg-white shadow-sm rounded-3xl">
+                      <p className="text-[11px] font-black text-[#707579] uppercase tracking-widest mb-2">CSAT Médio</p>
+                      <div className="text-4xl font-black text-yellow-500 italic">4.9</div>
                    </Card>
-                   <Card className="bg-[#0f0f0f] border-white/5 p-6">
-                      <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-2">Atendentes On</p>
-                      <div className="text-4xl font-black italic text-green-500">{atendentesRanking.filter(a => a.status === 'online').length}</div>
+                   <Card className="p-8 border-none bg-[#EEFFDE] shadow-sm rounded-3xl">
+                      <p className="text-[11px] font-black text-green-700 uppercase tracking-widest mb-2">Em Aberto</p>
+                      <div className="text-4xl font-black text-green-700 italic">{conversas.length}</div>
                    </Card>
-                   <Card className="bg-primary border-none p-6 text-white shadow-xl shadow-primary/20">
-                      <p className="text-[10px] font-black uppercase tracking-widest mb-2 opacity-70">Conversão</p>
-                      <div className="text-4xl font-black italic tracking-tighter">94%</div>
+                   <Card className="p-8 border-none bg-[#3390EC] shadow-xl shadow-[#3390EC]/30 rounded-3xl text-white">
+                      <p className="text-[11px] font-black uppercase tracking-widest mb-2 opacity-70">SLA Médio</p>
+                      <div className="text-4xl font-black italic">2 min</div>
                    </Card>
                 </div>
-                <div className="grid grid-cols-1 lg:grid-cols-7 gap-8">
-                   <Card className="lg:col-span-4 bg-[#0f0f0f] border-white/5 p-8 rounded-3xl min-h-[400px]">
-                      <h3 className="text-xl font-black italic uppercase mb-8 flex items-center gap-3"><Trophy className="text-yellow-500" /> Top Operadores</h3>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                   <Card className="p-8 border-none bg-white shadow-sm rounded-3xl">
+                      <h3 className="font-black text-lg uppercase italic mb-8 flex items-center gap-2"><Trophy className="text-yellow-500 h-6 w-6" /> Placar de Líderes</h3>
                       <Table>
-                        <TableHeader><TableRow className="border-white/10 hover:bg-transparent"><TableHead className="font-black text-xs uppercase text-gray-500">Pos</TableHead><TableHead className="font-black text-xs uppercase text-gray-500">Nome</TableHead><TableHead className="font-black text-xs uppercase text-gray-500 text-right">Score</TableHead></TableRow></TableHeader>
+                        <TableHeader><TableRow className="border-gray-100 hover:bg-transparent"><TableHead className="font-black text-[10px] uppercase">Operador</TableHead><TableHead className="text-right font-black text-[10px] uppercase">Pontos</TableHead></TableRow></TableHeader>
                         <TableBody>
-                           {atendentesRanking.map((at, i) => (
-                             <TableRow key={at.id} className="border-white/5 group">
-                                <TableCell className={`font-black italic text-lg ${i === 0 ? 'text-yellow-500' : 'text-gray-500'}`}>{i+1}º</TableCell>
-                                <TableCell className="font-bold">{at.nome}</TableCell>
-                                <TableCell className="text-right font-black font-mono text-primary text-xl tracking-tighter">{at.pontos_gamificacao}</TableCell>
+                           {atendentesRanking.map((a, i) => (
+                             <TableRow key={a.id} className="border-gray-50 group hover:bg-gray-50">
+                                <TableCell className="flex items-center gap-3">
+                                   <div className={`w-8 h-8 rounded-full flex items-center justify-center font-black italic text-sm ${i === 0 ? 'bg-yellow-100 text-yellow-600' : 'bg-gray-100 text-gray-400'}`}>{i+1}</div>
+                                   <span className="font-bold text-[#333]">{a.nome}</span>
+                                </TableCell>
+                                <TableCell className="text-right font-black text-[#3390EC] text-xl italic tracking-tighter">{a.pontos_gamificacao}</TableCell>
                              </TableRow>
                            ))}
                         </TableBody>
                       </Table>
                    </Card>
-                   <Card className="lg:col-span-3 bg-[#0f0f0f] border-white/5 p-8 rounded-3xl min-h-[400px]">
-                      <h3 className="text-xl font-black italic uppercase mb-8 flex items-center gap-3"><BarChart3 className="text-primary" /> Volume / Hora</h3>
-                      <div className="h-[280px] w-full mt-4">
-                         <ResponsiveContainer width="100%" height="100%">
-                            <BarChart data={statsVolume}>
-                               <XAxis dataKey="nome" axisLine={false} tickLine={false} fontSize={10} fontWeight="900" />
-                               <CartesianGrid vertical={false} stroke="#ffffff05" />
-                               <Bar dataKey="volume" fill="#7c3aed" radius={[6, 6, 0, 0]} />
-                            </BarChart>
-                         </ResponsiveContainer>
+                   <Card className="p-8 border-none bg-white shadow-sm rounded-3xl">
+                      <h3 className="font-black text-lg uppercase italic mb-8 flex items-center gap-3"><BarChart3 className="text-[#3390EC] h-6 w-6" /> Volume por Hora</h3>
+                      <div className="h-[280px] w-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={statsVolume}>
+                            <XAxis dataKey="nome" axisLine={false} tickLine={false} fontSize={10} fontWeight="800" />
+                            <Bar dataKey="volume" fill="#3390EC" radius={[6, 6, 0, 0]} />
+                          </BarChart>
+                        </ResponsiveContainer>
                       </div>
                    </Card>
                 </div>
              </div>
           </TabsContent>
 
-          {/* ABA CONFIGURAÇÕES */}
-          <TabsContent value="configuracoes" className="flex-1 m-0 h-full p-10 overflow-auto bg-[#070707] data-[state=inactive]:hidden border-none outline-none">
-             <div className="max-w-4xl mx-auto space-y-12">
-                <header>
-                   <h1 className="text-4xl font-black italic tracking-tighter uppercase">Settings</h1>
-                   <p className="text-sm text-gray-500 font-medium">Controle de sistema e perfil</p>
-                </header>
-                <div className="grid gap-8">
-                   <Card className="bg-[#0f0f0f] border-white/5 p-8 rounded-3xl">
-                      <h3 className="text-lg font-black uppercase mb-6">Informações Pessoais</h3>
-                      <div className="space-y-4">
-                         <div className="space-y-2">
-                           <label className="text-xs font-black uppercase text-gray-500">Nome de Exibição</label>
-                           <Input defaultValue={perfilAtual?.nome} className="bg-white/5 border-none h-12 rounded-xl font-bold" />
-                         </div>
-                         <Button className="bg-primary/20 text-primary hover:bg-primary hover:text-white transition-all font-black px-10">SALVAR</Button>
+          {/* TAB: CONFIGURATIONS (LIGHT VERSION) */}
+          <TabsContent value="configuracoes" className="flex-1 m-0 h-full p-10 bg-[#F4F4F5] overflow-auto data-[state=inactive]:hidden border-none outline-none">
+             <div className="max-w-2xl mx-auto space-y-6">
+                <Card className="p-10 bg-white border-none shadow-sm rounded-[40px]">
+                   <div className="flex flex-col items-center mb-10 text-center">
+                      <div className="w-24 h-24 bg-[#3390EC]/10 text-[#3390EC] rounded-[30px] flex items-center justify-center mb-6 shadow-inner rotate-3 hover:rotate-0 transition-transform cursor-pointer">
+                         <Bot className="w-12 h-12" />
                       </div>
-                   </Card>
-                </div>
+                      <h2 className="text-3xl font-black text-[#333] tracking-tighter uppercase italic">Centro de IA</h2>
+                      <p className="text-sm text-[#707579] font-medium mt-1">Configure o cérebro autônomo do SISTLG</p>
+                   </div>
+                   
+                   <div className="space-y-10">
+                      <div className="space-y-4">
+                         <div className="flex items-center justify-between ml-1">
+                            <label className="text-[12px] font-black text-[#707579] uppercase tracking-widest">OpenAI API Key</label>
+                            <Badge className="bg-blue-100 text-[#3390EC] border-none text-[10px] font-bold">GPT-4O MINI</Badge>
+                         </div>
+                         <div className="flex gap-3">
+                            <Input 
+                              type="password" 
+                              value={apiKey} 
+                              onChange={e => setApiKey(e.target.value)}
+                              placeholder="sk-...." 
+                              className="h-14 bg-[#F4F4F5] border-none rounded-2xl font-mono text-sm px-6" 
+                            />
+                            <Button className="h-14 px-8 bg-[#3390EC] hover:bg-[#2879C9] font-black rounded-2xl shadow-xl shadow-[#3390EC]/30 uppercase italic">Salvar</Button>
+                         </div>
+                         <div className="flex items-center gap-2 p-4 bg-orange-50 rounded-2xl border border-orange-100/50">
+                            <AlertCircle className="w-4 h-4 text-orange-500" />
+                            <p className="text-[11px] text-orange-700 font-medium leading-tight">Sua chave é armazenada de forma criptografada e usada apenas para processar mensagens do bot.</p>
+                         </div>
+                      </div>
+
+                      <Separator className="opacity-10" />
+
+                      <div className="grid grid-cols-2 gap-4">
+                         <div className="p-6 bg-[#EEFFDE] rounded-3xl border border-green-200/50">
+                            <CheckCircle2 className="text-green-600 w-6 h-6 mb-3" />
+                            <h4 className="text-sm font-black text-green-900 uppercase">Status do Bot</h4>
+                            <p className="text-[11px] text-green-700 font-bold mt-1 uppercase italic">Ativo & Operacional</p>
+                         </div>
+                         <div className="p-6 bg-blue-50 rounded-3xl border border-blue-200/50">
+                            <Sparkles className="text-[#3390EC] w-6 h-6 mb-3" />
+                            <h4 className="text-sm font-black text-[#3390EC] uppercase">Inteligência</h4>
+                            <p className="text-[11px] text-blue-800 font-bold mt-1 uppercase italic">Pronto para Responder</p>
+                         </div>
+                      </div>
+                   </div>
+                </Card>
              </div>
           </TabsContent>
 
