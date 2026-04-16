@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
-import { Send, MoreVertical, Search, Bot, User, Clock, Settings, Sparkles, XCircle, CheckCircle2, Trophy, BarChart3, TrendingUp, Star, Users, LogOut, AlertCircle, Menu } from 'lucide-react';
+import { Send, MoreVertical, Search, Bot, User, Clock, Settings, Sparkles, XCircle, CheckCircle2, Trophy, BarChart3, TrendingUp, Star, Users, LogOut, AlertCircle, Menu, Zap, Eye, Tag, FileText } from 'lucide-react';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -50,6 +50,13 @@ type MensagemInterna = {
   created_at: string;
 };
 
+type RespostaRapida = {
+  id: string;
+  titulo: string;
+  categoria: string;
+  conteudo: string;
+};
+
 export default function Dashboard() {
   const supabase = createClient();
   const [activeTab, setActiveTab] = useState('atendimento');
@@ -65,6 +72,13 @@ export default function Dashboard() {
   const [modoMensagem, setModoMensagem] = useState<'publico' | 'interno'>('publico');
   const [mensagensInternas, setMensagensInternas] = useState<MensagemInterna[]>([]);
   const [apiKey, setApiKey] = useState('');
+  
+  const [respostasRapidas, setRespostasRapidas] = useState<RespostaRapida[]>([]);
+  const [isCreatingResposta, setIsCreatingResposta] = useState(false);
+  const [rTitulo, setRTitulo] = useState('');
+  const [rCategoria, setRCategoria] = useState('');
+  const [rConteudo, setRConteudo] = useState('');
+  const [searchResposta, setSearchResposta] = useState('');
 
   // 1. Setup inicial e Auth
   useEffect(() => {
@@ -79,6 +93,10 @@ export default function Dashboard() {
         setPerfilAtual(atendente);
         setAuthError(null);
         await supabase.from('atendentes').update({ status: 'online' }).eq('id', atendente.id);
+        // Fetch Respostas Rápidas iniciais
+        const { data: respoData } = await supabase.from('respostas_rapidas').select('*').eq('atendente_id', user.id).order('created_at', { ascending: false });
+        if (respoData) setRespostasRapidas(respoData);
+
       } catch (err) { setAuthError("Erro de carregamento."); }
     }
     setupDashboard();
@@ -168,6 +186,47 @@ export default function Dashboard() {
     }
   };
 
+  const [tagsMenuOpen, setTagsMenuOpen] = useState(false);
+  const tagsList = ['#nome', '#primeiroNome', '#saudação'];
+
+  const aplicarRespostaRapida = (conteudoRaw: string) => {
+    if (!conversaAtiva) return;
+    let mensagemProcessada = conteudoRaw;
+    const primeiroNome = conversaAtiva.clientes.nome.split(' ')[0] || '';
+    
+    mensagemProcessada = mensagemProcessada.replace(/#nome/g, conversaAtiva.clientes.nome);
+    mensagemProcessada = mensagemProcessada.replace(/#primeiroNome/g, primeiroNome);
+    
+    const hora = new Date().getHours();
+    const saudacao = hora < 12 ? 'Bom dia' : hora < 18 ? 'Boa tarde' : 'Boa noite';
+    mensagemProcessada = mensagemProcessada.replace(/#saudação/g, saudacao);
+    
+    setNovaMensagem(prev => prev + (prev ? ' ' : '') + mensagemProcessada);
+    setActiveTab('atendimento');
+  };
+
+  const salvarNovaResposta = async () => {
+    if(!rTitulo || !rConteudo) return alert("Título e Conteúdo são obrigatórios");
+    try {
+      const res = await fetch('/api/respostas-rapidas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ titulo: rTitulo, categoria: rCategoria, conteudo: rConteudo })
+      });
+      const data = await res.json();
+      if(data.success) {
+         setRespostasRapidas([data.resposta, ...respostasRapidas]);
+         setIsCreatingResposta(false);
+         setRTitulo('');
+         setRCategoria('');
+         setRConteudo('');
+      } else { alert("Erro ao criar resposta: " + data.error); }
+    } catch(err) {
+      console.error(err);
+      alert("Erro fatal ao salvar resposta rápida");
+    }
+  };
+
   const msgsUnificadas = [
     ...mensagens.map(m => ({ ...m, ctx: 'pub' })),
     ...mensagensInternas.map(m => ({ ...m, remetente: 'atendente', ctx: 'int' }))
@@ -185,6 +244,9 @@ export default function Dashboard() {
           <div className="flex flex-col gap-5 mt-4">
             <Button variant="ghost" onClick={() => setActiveTab('atendimento')} className={`h-12 w-12 rounded-2xl p-0 transition-all ${activeTab === 'atendimento' ? 'bg-[#3390EC] text-white shadow-lg shadow-[#3390EC]/30' : 'text-[#707579] hover:bg-[#F4F4F5]'}`}>
               <Bot className="w-6 h-6" />
+            </Button>
+            <Button variant="ghost" onClick={() => setActiveTab('respostas_rapidas')} className={`h-12 w-12 rounded-2xl p-0 transition-all ${activeTab === 'respostas_rapidas' ? 'bg-green-500 text-white shadow-lg shadow-green-500/30' : 'text-[#707579] hover:bg-[#F4F4F5]'}`}>
+              <Zap className="w-6 h-6" />
             </Button>
             <Button variant="ghost" onClick={() => setActiveTab('gerencial')} className={`h-12 w-12 rounded-2xl p-0 transition-all ${activeTab === 'gerencial' ? 'bg-[#3390EC] text-white shadow-lg shadow-[#3390EC]/30' : 'text-[#707579] hover:bg-[#F4F4F5]'}`}>
               <Trophy className="w-6 h-6" />
@@ -298,6 +360,117 @@ export default function Dashboard() {
                   <p className="text-sm font-bold tracking-tight bg-[#707579] text-white px-4 py-1.5 rounded-full opacity-60">Selecione uma conversa para começar</p>
                 </div>
               )}
+            </div>
+          </TabsContent>
+
+          {/* TAB: RESPOSTAS RÁPIDAS */}
+          <TabsContent value="respostas_rapidas" className="flex-1 m-0 h-full bg-[#f8f9fa] overflow-hidden data-[state=inactive]:hidden border-none outline-none">
+            <div className="max-w-2xl mx-auto flex flex-col h-full bg-white shadow-xl shadow-black/5 animate-in slide-in-from-left-8 duration-300">
+              
+              <header className="h-[70px] border-b border-gray-100 flex items-center justify-between px-6 shrink-0 bg-white z-10 relative">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-green-100 text-green-600 rounded-full flex items-center justify-center">
+                     <Zap className="w-5 h-5 fill-current" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-black text-[#333] tracking-tight">{isCreatingResposta ? 'Criar Resposta Rápida' : 'Respostas Rápidas'}</h2>
+                    {isCreatingResposta && <p className="text-xs text-gray-400 font-medium tracking-tight">Configure sua automação.</p>}
+                  </div>
+                </div>
+                {isCreatingResposta ? (
+                   <Button variant="ghost" onClick={() => setIsCreatingResposta(false)} className="text-gray-400 hover:bg-gray-50 h-10 w-10 p-0 rounded-full">
+                     <XCircle className="w-6 h-6" />
+                   </Button>
+                ) : (
+                   <Button onClick={() => setIsCreatingResposta(true)} className="bg-green-500 hover:bg-green-600 text-white font-bold h-10 px-5 rounded-full shadow-lg shadow-green-500/20">
+                     + Novo
+                   </Button>
+                )}
+              </header>
+
+              <ScrollArea className="flex-1 p-6">
+                {!isCreatingResposta ? (
+                  <div className="space-y-6">
+                    {/* Pesquisa e Filtros */}
+                    <div className="space-y-4">
+                      <div className="relative">
+                        <Search className="absolute left-4 top-3.5 h-4 w-4 text-gray-400" />
+                        <Input value={searchResposta} onChange={e => setSearchResposta(e.target.value)} placeholder="Pesquisar resposta rápida" className="pl-11 h-12 bg-gray-50 border-gray-100 rounded-2xl focus-visible:ring-green-500 shadow-inner" />
+                      </div>
+                      <div className="flex gap-2 flex-wrap">
+                        <Badge className="bg-green-600 hover:bg-green-700 text-white cursor-pointer px-4 py-1.5 rounded-full font-bold">Tudo</Badge>
+                        <Badge className="bg-green-100 hover:bg-green-200 text-green-800 border-none cursor-pointer px-4 py-1.5 rounded-full font-bold">Por Tipo</Badge>
+                        <Badge className="bg-green-100 hover:bg-green-200 text-green-800 border-none cursor-pointer px-4 py-1.5 rounded-full font-bold">Sem Categoria</Badge>
+                      </div>
+                    </div>
+
+                    <Separator className="bg-gray-100" />
+
+                    {/* Lista Agrupada - Mock Sem Categoria */}
+                    <div className="space-y-3">
+                       <h3 className="text-xs font-black text-green-600 tracking-wider uppercase ml-1 flex items-center gap-2">
+                          <Tag className="w-3.5 h-3.5" /> Suas Respostas Rápidas
+                       </h3>
+                       <div className="flex flex-col rounded-3xl bg-[#EEFFDE] border border-green-200 overflow-hidden shadow-sm">
+                         {respostasRapidas.filter(r => r.titulo.toLowerCase().includes(searchResposta.toLowerCase())).map((resp, i) => (
+                           <div key={resp.id} className={`flex items-center justify-between p-4 bg-[#EEFFDE] hover:bg-green-100 transition-colors ${i !== 0 ? 'border-t border-green-200' : ''}`}>
+                             <div className="flex items-center gap-3">
+                                <FileText className="w-5 h-5 text-green-700 opacity-60" />
+                                <span className="font-bold text-green-900 text-sm">{resp.titulo}</span>
+                             </div>
+                             <div className="flex items-center gap-2">
+                                <Button variant="ghost" size="icon" className="h-8 w-8 text-green-700 hover:bg-green-200 rounded-full" title="Ver Resposta">
+                                  <Eye className="w-4 h-4" />
+                                </Button>
+                                <Button onClick={() => aplicarRespostaRapida(resp.conteudo)} variant="ghost" size="icon" className="h-8 w-8 text-green-700 hover:bg-green-200 rounded-full" title="Usar no Chat">
+                                  <Send className="w-4 h-4" />
+                                </Button>
+                             </div>
+                           </div>
+                         ))}
+                         {respostasRapidas.length === 0 && (
+                           <div className="p-6 text-center text-green-800/60 text-sm font-medium">Nenhuma resposta encontrada.</div>
+                         )}
+                       </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-300">
+                    <div className="space-y-2">
+                       <label className="text-xs font-black text-gray-500 uppercase tracking-widest pl-2">Título do Modelo</label>
+                       <Input value={rTitulo} onChange={e => setRTitulo(e.target.value)} placeholder="Digite o título da resposta rápida" className="h-14 bg-gray-50 border-gray-200 rounded-2xl shadow-inner font-bold text-gray-700 px-4" />
+                    </div>
+
+                    <Card className="border-gray-200 shadow-sm rounded-3xl overflow-hidden bg-white">
+                      <div className="p-5 border-b border-gray-100 bg-gray-50/50 flex justify-between items-center relative">
+                        <h4 className="font-black text-[#333]">Ação da Resposta Rápida</h4>
+                        <div className="relative">
+                          <Button onClick={() => setTagsMenuOpen(!tagsMenuOpen)} size="sm" className="bg-green-500 hover:bg-green-600 text-white rounded-full font-bold h-8 px-4 text-xs gap-1 shadow-md shadow-green-500/20">
+                            # Tags <Zap className="w-3 h-3 fill-current" />
+                          </Button>
+                          {tagsMenuOpen && (
+                            <div className="origin-top-right absolute right-0 mt-2 w-48 rounded-2xl shadow-2xl bg-white border border-gray-100 z-50 p-2 animate-in fade-in zoom-in-95">
+                               <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-3 mb-2 ml-1 mt-1">Tags Disponíveis</p>
+                               {tagsList.map(tag => (
+                                 <button key={tag} onClick={() => { setRConteudo(prev => prev + ' ' + tag + ' '); setTagsMenuOpen(false); }} className="w-full text-left px-4 py-2 text-sm font-bold text-gray-700 hover:bg-green-50 hover:text-green-600 rounded-xl transition-colors">
+                                   {tag}
+                                 </button>
+                               ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <div className="p-5 flex flex-col gap-4">
+                        <textarea value={rConteudo} onChange={e => setRConteudo(e.target.value)} placeholder="Digite o conteúdo da resposta. Use as #Tags acima para dados dinâmicos do cliente..." className="w-full h-32 bg-gray-50 rounded-2xl border-none resize-none p-4 text-sm font-medium focus:ring-2 outline-none focus:ring-green-500 shadow-inner" />
+                        <Button onClick={salvarNovaResposta} className="w-full h-12 bg-green-500 hover:bg-green-600 text-white font-black uppercase tracking-wide rounded-2xl shadow-xl shadow-green-500/20 text-sm">
+                          Salvar Resposta Rápida
+                        </Button>
+                      </div>
+                    </Card>
+                  </div>
+                )}
+              </ScrollArea>
+
             </div>
           </TabsContent>
 
