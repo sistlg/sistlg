@@ -23,10 +23,12 @@ type Conversa = {
   status: string;
   última_mensagem_at: string;
   clientes: {
+    id: string;
     nome: string;
     username: string;
   };
   bots_config: {
+    id: string;
     nome_bot: string;
   };
 };
@@ -87,7 +89,7 @@ export default function Dashboard() {
     async function loadConversas() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-      const { data } = await supabase.from('conversas').select('*, clientes(nome, username), bots_config(nome_bot, atendente_id)').order('última_mensagem_at', { ascending: false });
+      const { data } = await supabase.from('conversas').select('*, clientes(id, nome, username), bots_config(id, nome_bot, atendente_id)').order('última_mensagem_at', { ascending: false });
       if (data) {
         const filt = (data as any[]).filter(c => c.bots_config.atendente_id === user.id);
         setConversas(filt);
@@ -103,10 +105,16 @@ export default function Dashboard() {
   useEffect(() => {
     if (!conversaAtiva) return;
     async function fetchMsgs() {
-      const { data: m } = await supabase.from('mensagens').select('*').eq('conversa_id', conversaAtiva!.id).order('created_at', { ascending: true });
-      if (m) setMensagens(m as any);
-      const { data: mi } = await supabase.from('mensagens_internas').select('*').eq('conversa_id', conversaAtiva!.id).order('created_at', { ascending: true });
-      if (mi) setMensagensInternas(mi as any);
+      try {
+        const res = await fetch(`/api/messages/history?clienteId=${conversaAtiva!.clientes.id}`);
+        if (res.ok) {
+          const json = await res.json();
+          setMensagens(json.mensagens || []);
+          setMensagensInternas(json.mensagensInternas || []);
+        }
+      } catch (err) {
+        console.error('Erro buscando histórico unificado:', err);
+      }
     }
     fetchMsgs();
     const ch = supabase.channel(`m:${conversaAtiva.id}`)
@@ -138,6 +146,26 @@ export default function Dashboard() {
     const txt = novaMensagem; setNovaMensagem('');
     const ep = modoMensagem === 'interno' ? '/api/messages/internal/send' : '/api/messages/send';
     await fetch(ep, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conversaId: conversaAtiva.id, conteudo: txt, atendenteId: perfilAtual?.id }) });
+  };
+
+  const salvarConfiguracaoIA = async () => {
+    if (!apiKey) return alert("Por favor, preencha a chave.");
+    const myBotIds = Array.from(new Set(conversas.map(c => c.bots_config?.id).filter(Boolean)));
+    if (myBotIds.length === 0) return alert("Nenhum bot associado encontrado para aplicar esta chave.");
+    
+    try {
+      for (const botId of myBotIds) {
+        await fetch('/api/admin/bot-config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ botId, openai_api_key: apiKey })
+        });
+      }
+      alert('Chave OpenAI salva com sucesso no banco de dados!');
+      setApiKey('');
+    } catch (err) {
+      alert("Erro ao salvar chave da OpenAI.");
+    }
   };
 
   const msgsUnificadas = [
@@ -357,7 +385,7 @@ export default function Dashboard() {
                               placeholder="sk-...." 
                               className="h-14 bg-[#F4F4F5] border-none rounded-2xl font-mono text-sm px-6" 
                             />
-                            <Button className="h-14 px-8 bg-[#3390EC] hover:bg-[#2879C9] font-black rounded-2xl shadow-xl shadow-[#3390EC]/30 uppercase italic">Salvar</Button>
+                            <Button onClick={salvarConfiguracaoIA} className="h-14 px-8 bg-[#3390EC] hover:bg-[#2879C9] font-black rounded-2xl shadow-xl shadow-[#3390EC]/30 uppercase italic">Salvar</Button>
                          </div>
                          <div className="flex items-center gap-2 p-4 bg-orange-50 rounded-2xl border border-orange-100/50">
                             <AlertCircle className="w-4 h-4 text-orange-500" />

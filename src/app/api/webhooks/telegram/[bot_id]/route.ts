@@ -105,7 +105,7 @@ export async function POST(
     let sentimento: 'positivo' | 'negativo' | 'neutro' = 'neutro';
     if (text.length > 0) {
       try {
-        sentimento = await analyzeSentiment(text);
+        sentimento = await analyzeSentiment(text, botConfig.openai_api_key);
       } catch (err) { console.error('Erro IA:', err); }
     }
 
@@ -133,7 +133,7 @@ export async function POST(
     // 10. Resposta Inteligente IA (Se Ativada)
     if (botConfig.is_active && text.length > 0) {
       try {
-        const aiResponse = await generateAIResponse([{ role: 'user', content: text }], botConfig.nome_bot);
+        const aiResponse = await generateAIResponse([{ role: 'user', content: text }], botConfig.nome_bot, botConfig.openai_api_key);
         if (aiResponse) {
           await sendTelegramMessage(botConfig.token_telegram, chatId, aiResponse);
           await supabaseAdmin.from('mensagens').insert({

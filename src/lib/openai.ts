@@ -4,12 +4,20 @@ export const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || 'missing-key-check-env',
 });
 
+function getClient(apiKey?: string) {
+  if (apiKey && apiKey.trim().length > 0) {
+    return new OpenAI({ apiKey });
+  }
+  return openai;
+}
+
 /**
  * Utilitário para gerar embeddings de um texto.
  * Utilizado para busca semântica na base de conhecimento.
  */
-export async function generateEmbedding(text: string) {
-  const response = await openai.embeddings.create({
+export async function generateEmbedding(text: string, customApiKey?: string) {
+  const client = getClient(customApiKey);
+  const response = await client.embeddings.create({
     model: 'text-embedding-3-small',
     input: text.replace(/\n/g, ' '),
   });
@@ -21,11 +29,12 @@ export async function generateEmbedding(text: string) {
  * Analisa o sentimento de um texto.
  * Retorna 'positivo', 'negativo' ou 'neutro'.
  */
-export async function analyzeSentiment(text: string): Promise<'positivo' | 'negativo' | 'neutro'> {
+export async function analyzeSentiment(text: string, customApiKey?: string): Promise<'positivo' | 'negativo' | 'neutro'> {
   if (!text || text.length < 3) return 'neutro';
 
   try {
-    const response = await openai.chat.completions.create({
+    const client = getClient(customApiKey);
+    const response = await client.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         {
@@ -54,11 +63,12 @@ export async function analyzeSentiment(text: string): Promise<'positivo' | 'nega
  * Refina uma mensagem escrita pelo atendente.
  * Melhora tom, clareza e empatia.
  */
-export async function refineMessage(text: string): Promise<string> {
+export async function refineMessage(text: string, customApiKey?: string): Promise<string> {
   if (!text || text.length < 5) return text;
 
   try {
-    const response = await openai.chat.completions.create({
+    const client = getClient(customApiKey);
+    const response = await client.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         {
@@ -90,11 +100,12 @@ Diretrizes:
  * Gera uma resposta autônoma para o cliente.
  * Usa o contexto da conversa para ser mais preciso.
  */
-export async function generateAIResponse(history: { role: 'user' | 'assistant', content: string }[], botName: string = 'sistlg'): Promise<string | null> {
+export async function generateAIResponse(history: { role: 'user' | 'assistant', content: string }[], botName: string = 'sistlg', customApiKey?: string): Promise<string | null> {
   if (history.length === 0) return null;
 
   try {
-    const response = await openai.chat.completions.create({
+    const client = getClient(customApiKey);
+    const response = await client.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         {

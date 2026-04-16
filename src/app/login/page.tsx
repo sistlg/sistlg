@@ -4,11 +4,13 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Bot, Lock } from 'lucide-react'
 
-export default function LoginPage({
+export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: { message: string }
+  searchParams: Promise<{ message: string }>
 }) {
+  const { message } = await searchParams;
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-muted/50 to-primary/5 p-4 font-sans">
       <Card className="w-full max-w-md backdrop-blur-xl bg-card/60 shadow-2xl border-primary/10">
@@ -52,9 +54,9 @@ export default function LoginPage({
               </div>
             </div>
             
-            {searchParams?.message && (
+            {message && (
               <p className="mt-4 p-3 bg-destructive/10 text-destructive text-center rounded-md text-sm border border-destructive/20 font-medium">
-                {searchParams.message}
+                {message}
               </p>
             )}
 
