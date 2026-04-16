@@ -174,6 +174,13 @@ export async function POST(
     if (msgError) throw msgError;
 
     // 7. Verificar Horário de Atendimento
+    if (!isOperational()) {
+      const msgFechado = "Olá! No momento estamos fora do nosso horário de atendimento.\n\n" +
+                         "<b>Nossos horários:</b>\n" +
+                         "Seg-Sex: 08:00 às 23:00\n" +
+                         "Sáb-Dom: 18:00 às 23:00\n\n" +
+                         "Sua mensagem foi recebida e responderemos assim que possível!";
+      
       await sendTelegramMessage(botConfig.token_telegram, chatId, msgFechado);
       
       return NextResponse.json({ ok: true, status: 'closed' });
